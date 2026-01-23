@@ -241,7 +241,7 @@ _inject_css()
 st.markdown(
     f"""
     <div class="tight">
-      <h1>🏛️ {APP_TITLE}</h1>
+      <h1>{APP_TITLE}</h1>
       <p class="muted">Análise de similaridade e integridade acadêmica</p>
     </div>
     """,
