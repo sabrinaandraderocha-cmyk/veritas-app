@@ -1,11 +1,10 @@
 import os
 import re
 import time
-import json
-import math
 import difflib
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import streamlit as st
 
@@ -30,7 +29,7 @@ DISCL = (
 )
 
 ETHICAL_NOTE = (
-    "⚠️ Similaridade não é, por si só, falta ética. "
+    "Similaridade não é, por si só, falta ética. "
     "Trechos conceituais, metodologia, citações e fórmulas recorrentes podem elevar a correspondência. "
     "Use o resultado como apoio de revisão, não como veredito."
 )
@@ -64,8 +63,10 @@ def _read_any(uploaded_file) -> str:
         return extract_text_from_pdf_bytes(b)
     return extract_text_from_txt_bytes(b)
 
+
 def _safe_words_count(text: str) -> int:
     return len(re.findall(r"\S+", text or ""))
+
 
 def _band(global_sim: float):
     if global_sim < 0.15:
@@ -73,6 +74,7 @@ def _band(global_sim: float):
     if global_sim < 0.30:
         return "🟡 Atenção editorial (moderada)", "Pode refletir trechos comuns. Revise seções sinalizadas."
     return "🟠 Revisão cuidadosa (elevada)", "Não é acusação. Há sobreposição relevante: revise trechos e citações."
+
 
 # =========================
 # UX: CSS leve
@@ -93,34 +95,32 @@ def _inject_css():
           }
           .tight h3 { margin-bottom: 0.2rem; }
           .tight p { margin-top: 0.2rem; }
+          code { white-space: pre-wrap; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+
 # =========================
-# INTERNET: SerpAPI
+# INTERNET: SerpAPI (com ranking melhorado)
 # =========================
 def _get_serpapi_key() -> Optional[str]:
-    # Preferir secrets do Streamlit Cloud
     key = None
     try:
         key = st.secrets.get("SERPAPI_KEY", None)
     except Exception:
         key = None
-    # fallback env
     if not key:
         key = os.getenv("SERPAPI_KEY")
     return key
 
+
 def _split_words(text: str) -> List[str]:
     return re.findall(r"[A-Za-zÀ-ÿ0-9]+", (text or "").lower())
 
+
 def build_chunks(text: str, chunk_words: int, stride_words: int, max_chunks: int = 12) -> List[str]:
-    """
-    Gera chunks curtos para busca web (privacidade).
-    Pega no máximo max_chunks trechos para não vazar demais e não estourar custo.
-    """
     words = _split_words(text)
     if not words:
         return []
@@ -131,7 +131,7 @@ def build_chunks(text: str, chunk_words: int, stride_words: int, max_chunks: int
         if len(chunk) >= max(12, chunk_words // 2):
             chunks.append(" ".join(chunk))
         i += stride_words
-    # Remove duplicados simples
+
     uniq = []
     seen = set()
     for c in chunks:
@@ -141,15 +141,14 @@ def build_chunks(text: str, chunk_words: int, stride_words: int, max_chunks: int
             seen.add(k)
     return uniq
 
+
 def seq_similarity(a: str, b: str) -> float:
-    """
-    Similaridade simples (0..1) com difflib. Boa para texto curto/snippet.
-    """
     a = (a or "").strip().lower()
     b = (b or "").strip().lower()
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(None, a, b).ratio()
+
 
 @dataclass
 class WebHit:
@@ -159,6 +158,63 @@ class WebHit:
     score: float
     chunk: str
 
+
+TRUST_BOOST_DOMAINS = [
+    "scielo", "periodicos.capes", "pubmed", "ncbi.nlm.nih.gov",
+    "doi.org", "springer", "wiley", "tandfonline", "elsevier", "sciencedirect",
+    "jstor", "cambridge", "oxford", "sagepub", "nature.com", "science.org",
+    "ieee.org", "acm.org"
+]
+
+PENALIZE_DOMAINS = [
+    "brainly", "passeidireto", "scribd", "docsity", "monografias", "trabalhosprontos",
+    "resumos", "blogspot", "wordpress", "medium.com", "reddit.com"
+]
+
+
+def _domain_of(url: str) -> str:
+    try:
+        netloc = urlparse(url).netloc.lower()
+        return netloc.replace("www.", "")
+    except Exception:
+        return ""
+
+
+def _domain_weight(domain: str) -> float:
+    d = (domain or "").lower()
+    if not d:
+        return 1.0
+
+    if d.endswith(".edu") or d.endswith(".gov"):
+        return 1.25
+
+    for t in TRUST_BOOST_DOMAINS:
+        if t in d:
+            return 1.18
+
+    for p in PENALIZE_DOMAINS:
+        if p in d:
+            return 0.82
+
+    return 1.0
+
+
+def _snippet_quality(snippet: str) -> float:
+    s = (snippet or "").strip()
+    n = len(s)
+    if n < 60:
+        return 0.85
+    if n < 120:
+        return 0.95
+    if n < 220:
+        return 1.00
+    return 1.06
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
 def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> List[Dict]:
     """
     Busca via SerpAPI (Google Search API).
@@ -166,33 +222,46 @@ def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> 
     """
     import requests  # lazy import
 
+    q = f"\"{chunk}\"" if len(chunk) >= 80 else chunk
     params = {
         "engine": "google",
-        "q": chunk,
+        "q": q,
         "api_key": serpapi_key,
         "num": num_results,
         "hl": "pt",
         "gl": "br",
     }
-    r = requests.get("https://serpapi.com/search.json", params=params, timeout=20)
+
+    r = requests.get("https://serpapi.com/search.json", params=params, timeout=25)
     r.raise_for_status()
     data = r.json()
+
     results = data.get("organic_results", []) or []
     cleaned = []
     for it in results[:num_results]:
         cleaned.append(
             {
-                "title": it.get("title", "") or "",
-                "link": it.get("link", "") or "",
-                "snippet": it.get("snippet", "") or "",
+                "title": (it.get("title") or "").strip(),
+                "link": (it.get("link") or "").strip(),
+                "snippet": (it.get("snippet") or "").strip(),
             }
         )
     return cleaned
 
-def web_similarity_scan(text: str, serpapi_key: str, profile_params: dict, num_chunks: int = 10, num_results: int = 5) -> List[WebHit]:
+
+def web_similarity_scan(
+    text: str,
+    serpapi_key: str,
+    profile_params: dict,
+    num_chunks: int = 10,
+    num_results: int = 5,
+    max_final_hits: int = 20,
+) -> List[WebHit]:
     """
-    Faz busca por chunks e calcula similaridade chunk vs snippet.
-    Retorna hits ordenados por score.
+    Ranking melhorado:
+    score_final = sim(chunk, title+snippet) * peso_domínio * qualidade_snippet
+    - Deduplica links (mantém melhor score por URL)
+    - Ordena por score_final
     """
     chunks = build_chunks(
         text,
@@ -200,21 +269,69 @@ def web_similarity_scan(text: str, serpapi_key: str, profile_params: dict, num_c
         stride_words=int(profile_params["stride_words"]),
         max_chunks=num_chunks,
     )
-    hits: List[WebHit] = []
+
+    raw_hits = []
     for c in chunks:
         try:
             results = serpapi_search_chunk(c, serpapi_key=serpapi_key, num_results=num_results)
         except Exception:
             continue
+
         for it in results:
-            snippet = (it.get("snippet") or "")
-            title = (it.get("title") or "")
-            link = (it.get("link") or "")
+            title = it.get("title", "") or ""
+            link = it.get("link", "") or ""
+            snippet = it.get("snippet", "") or ""
+
             combined = f"{title}\n{snippet}".strip()
-            score = seq_similarity(c, combined)
-            hits.append(WebHit(title=title, link=link, snippet=snippet, score=score, chunk=c))
-    hits.sort(key=lambda x: x.score, reverse=True)
+            sim = seq_similarity(c, combined)
+
+            domain = _domain_of(link)
+            w_dom = _domain_weight(domain)
+            w_snip = _snippet_quality(snippet)
+
+            score_final = _clamp(sim * w_dom * w_snip, 0.0, 1.0)
+
+            raw_hits.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "snippet": snippet,
+                    "domain": domain,
+                    "score": score_final,
+                    "chunk": c,
+                }
+            )
+
+    # dedup por link (fica com o melhor)
+    best_by_link = {}
+    for h in raw_hits:
+        link = h["link"]
+        if not link:
+            continue
+        if link not in best_by_link or h["score"] > best_by_link[link]["score"]:
+            best_by_link[link] = h
+
+    deduped = list(best_by_link.values())
+    deduped.sort(key=lambda x: x["score"], reverse=True)
+    deduped = deduped[:max_final_hits]
+
+    hits: List[WebHit] = []
+    for h in deduped:
+        title = h["title"]
+        domain = h["domain"]
+        if domain:
+            title = f"{title}  ({domain})"
+        hits.append(
+            WebHit(
+                title=title,
+                link=h["link"],
+                snippet=h["snippet"],
+                score=h["score"],
+                chunk=h["chunk"],
+            )
+        )
     return hits
+
 
 # =========================
 # State
@@ -230,6 +347,7 @@ def _init_state():
         st.session_state["profile"] = "Rápido (padrão)"
     if "internet_last" not in st.session_state:
         st.session_state["internet_last"] = None
+
 
 # =========================
 # APP
@@ -254,32 +372,32 @@ with st.container(border=True):
     st.caption(ETHICAL_NOTE)
 
 # =========================
-# Sidebar (agora útil)
+# Sidebar
 # =========================
 with st.sidebar:
-    st.subheader("✨ Modo de análise")
+    st.subheader("Modo de análise")
 
     st.session_state["profile"] = st.selectbox(
         "Perfil",
         list(PROFILES.keys()),
         index=list(PROFILES.keys()).index(st.session_state["profile"]),
-        help="Perfis substituem configurações técnicas. Use 'Rigoroso' para cópia literal e 'Sensível' para paráfrase próxima.",
+        help="Use 'Rigoroso' para cópia literal e 'Sensível' para paráfrase próxima.",
     )
 
     st.caption(
-        f"**{st.session_state['profile']}** → "
-        f"trecho {PROFILES[st.session_state['profile']]['chunk_words']} palavras | "
+        f"{st.session_state['profile']} → "
+        f"trecho {PROFILES[st.session_state['profile']]['chunk_words']} | "
         f"passo {PROFILES[st.session_state['profile']]['stride_words']} | "
         f"limiar {PROFILES[st.session_state['profile']]['threshold']}"
     )
 
     st.divider()
-    st.subheader("🔒 Internet (opcional)")
+    st.subheader("Internet (opcional)")
     key = _get_serpapi_key()
     if key:
         st.success("SerpAPI key detectada ✅")
     else:
-        st.warning("Sem SERPAPI_KEY. O modo Internet ficará indisponível.")
+        st.caption("Modo Internet indisponível (SERPAPI_KEY não configurada).")
 
     st.caption("Recomendado: manter o padrão (Biblioteca). Use Internet só quando fizer sentido.")
 
@@ -294,7 +412,12 @@ with tabs[0]:
     with col1:
         with st.container(border=True):
             st.subheader("Texto para análise")
-            mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True)
+            mode = st.radio(
+                "Como enviar o texto?",
+                ["Colar texto", "Enviar arquivo"],
+                horizontal=True,
+                key="radio_biblioteca_envio",
+            )
 
             query_name = "Texto colado"
             query_text = ""
@@ -306,7 +429,7 @@ with tabs[0]:
                     placeholder="Cole seu texto aqui..."
                 )
             else:
-                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"])
+                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="upl_biblioteca")
                 if up is not None:
                     query_name = up.name
                     try:
@@ -340,7 +463,6 @@ with tabs[0]:
         threshold = float(profile_params["threshold"])
         top_k_per_chunk = int(profile_params["top_k_per_chunk"])
 
-        # corpus filtrado (excluir marcado)
         corpus = {}
         for name, text in st.session_state["library"].items():
             meta = st.session_state["library_meta"].get(name, {})
@@ -453,8 +575,7 @@ with tabs[0]:
 # TAB 2: Internet (externo)
 # =========================================================
 with tabs[1]:
-    st.subheader("🌐 Similaridade na Internet (modo externo)")
-
+    st.subheader("Similaridade na Internet (modo externo)")
     st.markdown(INTERNET_PRIVACY_NOTE)
 
     serp_key = _get_serpapi_key()
@@ -462,12 +583,24 @@ with tabs[1]:
         st.error("Modo Internet indisponível: configure `SERPAPI_KEY` nos secrets.")
     else:
         with st.container(border=True):
-            st.markdown("**Como funciona:** o Veritas envia *trechos curtos* do seu texto para busca e compara com snippets retornados.")
-            consent = st.checkbox("✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.", value=False)
+            st.markdown(
+                "**Como funciona:** o Veritas envia *trechos curtos* do seu texto para busca "
+                "e compara com snippets retornados."
+            )
+            consent = st.checkbox(
+                "✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.",
+                value=False,
+                key="internet_consent",
+            )
 
             st.divider()
 
-            mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True)
+            mode = st.radio(
+                "Como enviar o texto?",
+                ["Colar texto", "Enviar arquivo"],
+                horizontal=True,
+                key="radio_internet_envio",
+            )
             query_name = "Texto colado"
             query_text = ""
 
@@ -475,10 +608,15 @@ with tabs[1]:
                 query_text = st.text_area(
                     "Cole o texto para checar na internet:",
                     height=240,
-                    placeholder="Cole seu texto aqui..."
+                    placeholder="Cole seu texto aqui...",
+                    key="internet_text",
                 )
             else:
-                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="internet_uploader")
+                up = st.file_uploader(
+                    "Envie um arquivo (.docx, .pdf, .txt)",
+                    type=["docx", "pdf", "txt"],
+                    key="internet_uploader",
+                )
                 if up is not None:
                     query_name = up.name
                     try:
@@ -486,18 +624,26 @@ with tabs[1]:
                     except Exception as e:
                         st.error(f"Não consegui ler o arquivo. Erro: {e}")
 
-            # Controles úteis (simples)
             colA, colB = st.columns(2)
             with colA:
-                num_chunks = st.slider("Quantidade de trechos enviados (menos = mais privado)", 3, 18, 10, 1)
+                num_chunks = st.slider(
+                    "Quantidade de trechos enviados (menos = mais privado)",
+                    3, 18, 10, 1,
+                    key="internet_chunks",
+                )
             with colB:
-                num_results = st.slider("Resultados por trecho", 3, 10, 5, 1)
+                num_results = st.slider(
+                    "Resultados por trecho",
+                    3, 10, 5, 1,
+                    key="internet_results",
+                )
 
             run_web = st.button(
                 "🔎 Buscar na internet",
                 type="primary",
                 use_container_width=True,
                 disabled=(not consent or not query_text),
+                key="btn_web",
             )
 
         if run_web:
@@ -509,6 +655,7 @@ with tabs[1]:
                     profile_params=profile_params,
                     num_chunks=int(num_chunks),
                     num_results=int(num_results),
+                    max_final_hits=20,
                 )
 
             st.session_state["internet_last"] = {
@@ -527,13 +674,12 @@ with tabs[1]:
 
             hits: List[WebHit] = webres["hits"] or []
             if not hits:
-                st.warning("Não encontrei resultados relevantes (ou ocorreu erro de busca). Tente aumentar trechos/resultados.")
+                st.warning("Não encontrei resultados relevantes (ou ocorreu erro). Tente aumentar trechos/resultados.")
             else:
-                # score global simples: média dos top hits (não é veredito)
                 top = hits[:10]
                 global_web = sum(h.score for h in top) / max(1, len(top))
                 st.metric("Índice web (heurístico)", f"{global_web*100:.1f}%")
-                st.caption("Este índice é apenas um sinal heurístico baseado em snippets, não uma prova.")
+                st.caption("Índice heurístico baseado em snippets — não é prova conclusiva.")
 
                 st.markdown("### Principais correspondências encontradas")
                 for i, h in enumerate(hits[:20], start=1):
@@ -551,7 +697,7 @@ with tabs[1]:
 # TAB 3: Biblioteca (upload)
 # =========================================================
 with tabs[2]:
-    st.subheader("📚 Biblioteca Veritas")
+    st.subheader("Biblioteca Veritas")
     st.write("Os documentos aqui são as **fontes de comparação** (modo privado).")
 
     with st.container(border=True):
@@ -559,6 +705,7 @@ with tabs[2]:
             "Adicionar documentos (.docx, .pdf, .txt)",
             type=["docx", "pdf", "txt"],
             accept_multiple_files=True,
+            key="upl_lib",
         )
 
         if up_lib:
@@ -628,7 +775,7 @@ with tabs[2]:
 # TAB 4: Sobre
 # =========================================================
 with tabs[3]:
-    st.subheader("⚙️ Sobre o Veritas")
+    st.subheader("Sobre o Veritas")
     st.markdown(
         """
 - **Modo Biblioteca (privado):** compara apenas com os documentos que você adicionou.
