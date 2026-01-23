@@ -3,7 +3,7 @@ import re
 import time
 import difflib
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import streamlit as st
@@ -38,6 +38,14 @@ INTERNET_PRIVACY_NOTE = (
     "🔒 **Privacidade**: ao usar o modo Internet, o Veritas envia **apenas trechos curtos** do seu texto "
     "(e não o texto inteiro), para reduzir exposição. Mesmo assim, evite usar esse modo com textos sensíveis "
     "ou não publicados se isso for um risco para você."
+)
+
+AI_HEURISTIC_NOTE = (
+    "⚠️ **Ressalva importante**\n\n"
+    "Este módulo **não comprova autoria** nem “detecta IA” com certeza. Ele apresenta **indícios heurísticos** "
+    "(padrões linguísticos e estatísticos) que **podem ocorrer tanto em textos humanos quanto em textos gerados "
+    "ou assistidos por IA**.\n\n"
+    "Use o resultado **exclusivamente como apoio à revisão**: fortalecer exemplos, fontes, precisão e marcas autorais."
 )
 
 # =========================
@@ -302,7 +310,6 @@ def web_similarity_scan(
                 }
             )
 
-    # dedup por link (fica com o melhor)
     best_by_link = {}
     for h in raw_hits:
         link = h["link"]
@@ -334,6 +341,137 @@ def web_similarity_scan(
 
 
 # =========================
+# INDÍCIOS DE USO DE IA (HEURÍSTICO)
+# =========================
+AI_CONNECTORS = [
+    "além disso", "dessa forma", "nesse sentido", "por fim", "em suma", "portanto",
+    "assim", "logo", "contudo", "entretanto", "todavia", "outrossim", "desse modo",
+    "vale destacar", "é importante destacar", "cabe ressaltar"
+]
+
+AI_VAGUE_WORDS = [
+    "importante", "relevante", "significativo", "notável", "essencial", "fundamental",
+    "diversos", "vários", "muitos", "alguns", "inúmeros", "de certa forma",
+    "em geral", "de modo geral", "de maneira geral"
+]
+
+def _sentences(text: str) -> List[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    # separação simples
+    parts = re.split(r"(?<=[\.\!\?])\s+|\n+", t)
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts
+
+def _tokens(text: str) -> List[str]:
+    return re.findall(r"[A-Za-zÀ-ÿ0-9]+", (text or "").lower())
+
+def _std(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    m = sum(values) / len(values)
+    v = sum((x - m) ** 2 for x in values) / max(1, len(values))
+    return v ** 0.5
+
+def analyze_ai_indicia(text: str) -> Dict:
+    """
+    Retorna métricas e um índice heurístico 0..100.
+    NÃO é detector.
+    """
+    t = (text or "").strip()
+    toks = _tokens(t)
+    sents = _sentences(t)
+
+    word_count = len(toks)
+    sent_word_lens = [len(_tokens(s)) for s in sents if len(_tokens(s)) > 0]
+
+    # métricas
+    unique = len(set(toks)) if toks else 0
+    ttr = (unique / word_count) if word_count else 0.0  # type-token ratio
+
+    mean_sent = (sum(sent_word_lens) / len(sent_word_lens)) if sent_word_lens else 0.0
+    std_sent = _std([float(x) for x in sent_word_lens]) if sent_word_lens else 0.0
+    cv_sent = (std_sent / mean_sent) if mean_sent > 0 else 0.0  # variação relativa
+
+    # conectores / palavras vagas
+    low = t.lower()
+    conn_hits = sum(len(re.findall(rf"\b{re.escape(c)}\b", low)) for c in AI_CONNECTORS)
+    vague_hits = sum(len(re.findall(rf"\b{re.escape(v)}\b", low)) for v in AI_VAGUE_WORDS)
+
+    conn_per_1k = (conn_hits / max(1, word_count)) * 1000.0
+    vague_per_1k = (vague_hits / max(1, word_count)) * 1000.0
+
+    # repetição local (tokens repetidos em janelas)
+    # mede quantas vezes a mesma palavra aparece em sequência curta (indicador de uniformidade)
+    rep = 0
+    for i in range(2, len(toks)):
+        if toks[i] == toks[i-1] or toks[i] == toks[i-2]:
+            rep += 1
+    rep_per_1k = (rep / max(1, word_count)) * 1000.0
+
+    # índice heurístico (0..100)
+    # - baixa variação de frase (cv baixo) aumenta índice
+    # - conectores e vagueza aumentam índice
+    # - repetição aumenta índice
+    # - ttr muito baixa aumenta índice (vocabulário repetido)
+    score = 0.0
+
+    # 1) uniformidade de sentença: cv < 0.55 tende a ser mais “padronizado”
+    if cv_sent > 0:
+        score += _clamp((0.55 - cv_sent) / 0.55, 0.0, 1.0) * 30.0
+    else:
+        score += 10.0
+
+    # 2) conectores (cap em 10 por 1k)
+    score += _clamp(conn_per_1k / 10.0, 0.0, 1.0) * 20.0
+
+    # 3) vagueza (cap em 18 por 1k)
+    score += _clamp(vague_per_1k / 18.0, 0.0, 1.0) * 20.0
+
+    # 4) repetição local (cap em 12 por 1k)
+    score += _clamp(rep_per_1k / 12.0, 0.0, 1.0) * 15.0
+
+    # 5) diversidade lexical (ttr) — abaixo de 0.33 aumenta; acima reduz
+    if ttr > 0:
+        score += _clamp((0.33 - ttr) / 0.33, 0.0, 1.0) * 15.0
+
+    score = _clamp(score, 0.0, 100.0)
+
+    if score < 33:
+        band = ("🟢 Baixa", "Poucos indícios de padronização. Ainda assim, revise precisão, fontes e exemplos.")
+    elif score < 66:
+        band = ("🟡 Moderada", "Há sinais de padronização. Reforce exemplos, especificidade e voz autoral.")
+    else:
+        band = ("🟠 Elevada", "Sinais mais fortes de padronização. Revise conectores, generalidades e detalhe empírico.")
+
+    # trechos “sinalizáveis” simples (frases com muitos conectores/vagueza)
+    flagged_sentences = []
+    for s in sents[:400]:
+        sl = s.lower()
+        c = sum(1 for x in AI_CONNECTORS if x in sl)
+        v = sum(1 for x in AI_VAGUE_WORDS if x in sl)
+        if (c + v) >= 2 and len(_tokens(s)) >= 10:
+            flagged_sentences.append(s)
+
+    return {
+        "score": float(score),
+        "band": band,
+        "word_count": word_count,
+        "sent_count": len(sents),
+        "ttr": float(ttr),
+        "mean_sent": float(mean_sent),
+        "cv_sent": float(cv_sent),
+        "conn_hits": int(conn_hits),
+        "vague_hits": int(vague_hits),
+        "conn_per_1k": float(conn_per_1k),
+        "vague_per_1k": float(vague_per_1k),
+        "rep_per_1k": float(rep_per_1k),
+        "flagged_sentences": flagged_sentences[:12],
+    }
+
+
+# =========================
 # State
 # =========================
 def _init_state():
@@ -347,6 +485,8 @@ def _init_state():
         st.session_state["profile"] = "Rápido (padrão)"
     if "internet_last" not in st.session_state:
         st.session_state["internet_last"] = None
+    if "ai_last" not in st.session_state:
+        st.session_state["ai_last"] = None
 
 
 # =========================
@@ -401,7 +541,13 @@ with st.sidebar:
 
     st.caption("Recomendado: manter o padrão (Biblioteca). Use Internet só quando fizer sentido.")
 
-tabs = st.tabs(["🧪 Biblioteca (privado)", "🌐 Internet (externo)", "📚 Biblioteca", "⚙️ Sobre"])
+tabs = st.tabs([
+    "🧪 Biblioteca (privado)",
+    "🌐 Internet (externo)",
+    "🤖 Indícios de Uso de IA (análise heurística)",
+    "📚 Biblioteca",
+    "⚙️ Sobre",
+])
 
 # =========================================================
 # TAB 1: Biblioteca (privado)
@@ -429,7 +575,11 @@ with tabs[0]:
                     placeholder="Cole seu texto aqui..."
                 )
             else:
-                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="upl_biblioteca")
+                up = st.file_uploader(
+                    "Envie um arquivo (.docx, .pdf, .txt)",
+                    type=["docx", "pdf", "txt"],
+                    key="upl_biblioteca"
+                )
                 if up is not None:
                     query_name = up.name
                     try:
@@ -694,9 +844,112 @@ with tabs[1]:
                     st.divider()
 
 # =========================================================
-# TAB 3: Biblioteca (upload)
+# TAB 3: Indícios de Uso de IA (análise heurística)
 # =========================================================
 with tabs[2]:
+    st.subheader("Indícios de Uso de IA (análise heurística)")
+    st.info(AI_HEURISTIC_NOTE)
+
+    col1, col2 = st.columns([1.15, 0.85], gap="large")
+
+    with col1:
+        with st.container(border=True):
+            st.subheader("Texto para análise")
+            mode = st.radio(
+                "Como enviar o texto?",
+                ["Colar texto", "Enviar arquivo"],
+                horizontal=True,
+                key="radio_ai_envio",
+            )
+
+            query_name = "Texto colado"
+            query_text = ""
+
+            if mode == "Colar texto":
+                query_text = st.text_area(
+                    "Cole o texto para análise heurística:",
+                    height=260,
+                    placeholder="Cole seu texto aqui...",
+                    key="ai_text",
+                )
+            else:
+                up = st.file_uploader(
+                    "Envie um arquivo (.docx, .pdf, .txt)",
+                    type=["docx", "pdf", "txt"],
+                    key="ai_uploader",
+                )
+                if up is not None:
+                    query_name = up.name
+                    try:
+                        query_text = _read_any(up)
+                    except Exception as e:
+                        st.error(f"Não consegui ler o arquivo. Erro: {e}")
+
+            run_ai = st.button(
+                "🤖 Rodar análise heurística",
+                type="primary",
+                use_container_width=True,
+                disabled=(not query_text),
+                key="btn_ai",
+            )
+
+    with col2:
+        with st.container(border=True):
+            wc = _safe_words_count(query_text)
+            st.subheader("Resumo")
+            st.markdown(f"<span class='pill'>📄 {wc} palavras</span>", unsafe_allow_html=True)
+            st.caption(
+                "Este módulo **não envia** o texto para a internet. "
+                "Ele calcula métricas locais de padronização/robustez."
+            )
+
+    if run_ai:
+        with st.spinner("Calculando indícios heurísticos..."):
+            ai = analyze_ai_indicia(query_text)
+        st.session_state["ai_last"] = {
+            "query_name": query_name,
+            "ts": int(time.time()),
+            "ai": ai,
+        }
+
+    aires = st.session_state.get("ai_last")
+    if aires:
+        st.divider()
+        ai = aires["ai"]
+
+        band_title, band_msg = ai["band"]
+
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Índice heurístico", f"{ai['score']:.0f}/100")
+        with m2:
+            st.metric("Palavras", f"{ai['word_count']}")
+        with m3:
+            st.metric("Frases", f"{ai['sent_count']}")
+
+        st.info(f"**{band_title}** — {band_msg}")
+
+        with st.container(border=True):
+            st.markdown("### Indicadores (interpretação)")
+            st.write(f"• **Diversidade lexical (TTR)**: {ai['ttr']:.2f} (mais alto tende a ser mais variado)")
+            st.write(f"• **Média de palavras por frase**: {ai['mean_sent']:.1f}")
+            st.write(f"• **Variação entre frases (CV)**: {ai['cv_sent']:.2f} (mais baixo = mais uniforme)")
+            st.write(f"• **Conectores por 1.000 palavras**: {ai['conn_per_1k']:.1f}")
+            st.write(f"• **Generalidades/vagueza por 1.000 palavras**: {ai['vague_per_1k']:.1f}")
+            st.write(f"• **Repetição local por 1.000 palavras**: {ai['rep_per_1k']:.1f}")
+
+        flagged = ai.get("flagged_sentences") or []
+        if flagged:
+            with st.container(border=True):
+                st.markdown("### Trechos para revisão (heurístico)")
+                st.caption("Frases com maior presença de conectores/generalidades (sugestão: inserir fonte, dado, exemplo, recorte).")
+                for i, s in enumerate(flagged, start=1):
+                    st.write(f"**{i}.** {s}")
+
+# =========================================================
+# TAB 4: Biblioteca (upload)
+# =========================================================
+with tabs[3]:
     st.subheader("Biblioteca Veritas")
     st.write("Os documentos aqui são as **fontes de comparação** (modo privado).")
 
@@ -772,15 +1025,16 @@ with tabs[2]:
         st.info("Ainda não há documentos na biblioteca.")
 
 # =========================================================
-# TAB 4: Sobre
+# TAB 5: Sobre
 # =========================================================
-with tabs[3]:
+with tabs[4]:
     st.subheader("Sobre o Veritas")
     st.markdown(
         """
 - **Modo Biblioteca (privado):** compara apenas com os documentos que você adicionou.
 - **Modo Internet (externo):** usa SerpAPI para buscar *trechos curtos* e comparar com snippets da web.
-- **Importante:** nenhum modo “prova plágio”; serve como apoio de revisão e integridade acadêmica.
+- **Indícios de Uso de IA (heurístico):** calcula padrões linguísticos locais (não é veredito).
+- **Importante:** nenhum modo “prova” plágio ou IA; serve como apoio à revisão e integridade acadêmica.
         """
     )
     st.caption(DISCL)
