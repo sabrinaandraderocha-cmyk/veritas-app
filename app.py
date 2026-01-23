@@ -3,7 +3,7 @@ import re
 import time
 import difflib
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import streamlit as st
@@ -15,7 +15,11 @@ from veritas_utils import (
     compute_matches,
     highlight_text,
 )
-from veritas_report import generate_pdf_report
+from veritas_report import (
+    generate_pdf_report,
+    generate_web_pdf_report,
+    generate_ai_pdf_report,
+)
 
 # =========================
 # CONFIG GERAL
@@ -192,18 +196,14 @@ def _domain_weight(domain: str) -> float:
     d = (domain or "").lower()
     if not d:
         return 1.0
-
     if d.endswith(".edu") or d.endswith(".gov"):
         return 1.25
-
     for t in TRUST_BOOST_DOMAINS:
         if t in d:
             return 1.18
-
     for p in PENALIZE_DOMAINS:
         if p in d:
             return 0.82
-
     return 1.0
 
 
@@ -265,12 +265,6 @@ def web_similarity_scan(
     num_results: int = 5,
     max_final_hits: int = 20,
 ) -> List[WebHit]:
-    """
-    Ranking melhorado:
-    score_final = sim(chunk, title+snippet) * peso_domínio * qualidade_snippet
-    - Deduplica links (mantém melhor score por URL)
-    - Ordena por score_final
-    """
     chunks = build_chunks(
         text,
         chunk_words=int(profile_params["chunk_words"]),
@@ -300,14 +294,7 @@ def web_similarity_scan(
             score_final = _clamp(sim * w_dom * w_snip, 0.0, 1.0)
 
             raw_hits.append(
-                {
-                    "title": title,
-                    "link": link,
-                    "snippet": snippet,
-                    "domain": domain,
-                    "score": score_final,
-                    "chunk": c,
-                }
+                {"title": title, "link": link, "snippet": snippet, "domain": domain, "score": score_final, "chunk": c}
             )
 
     best_by_link = {}
@@ -328,15 +315,7 @@ def web_similarity_scan(
         domain = h["domain"]
         if domain:
             title = f"{title}  ({domain})"
-        hits.append(
-            WebHit(
-                title=title,
-                link=h["link"],
-                snippet=h["snippet"],
-                score=h["score"],
-                chunk=h["chunk"],
-            )
-        )
+        hits.append(WebHit(title=title, link=h["link"], snippet=h["snippet"], score=h["score"], chunk=h["chunk"]))
     return hits
 
 
@@ -359,10 +338,8 @@ def _sentences(text: str) -> List[str]:
     t = (text or "").strip()
     if not t:
         return []
-    # separação simples
     parts = re.split(r"(?<=[\.\!\?])\s+|\n+", t)
-    parts = [p.strip() for p in parts if p.strip()]
-    return parts
+    return [p.strip() for p in parts if p.strip()]
 
 def _tokens(text: str) -> List[str]:
     return re.findall(r"[A-Za-zÀ-ÿ0-9]+", (text or "").lower())
@@ -375,10 +352,6 @@ def _std(values: List[float]) -> float:
     return v ** 0.5
 
 def analyze_ai_indicia(text: str) -> Dict:
-    """
-    Retorna métricas e um índice heurístico 0..100.
-    NÃO é detector.
-    """
     t = (text or "").strip()
     toks = _tokens(t)
     sents = _sentences(t)
@@ -386,15 +359,13 @@ def analyze_ai_indicia(text: str) -> Dict:
     word_count = len(toks)
     sent_word_lens = [len(_tokens(s)) for s in sents if len(_tokens(s)) > 0]
 
-    # métricas
     unique = len(set(toks)) if toks else 0
-    ttr = (unique / word_count) if word_count else 0.0  # type-token ratio
+    ttr = (unique / word_count) if word_count else 0.0
 
     mean_sent = (sum(sent_word_lens) / len(sent_word_lens)) if sent_word_lens else 0.0
     std_sent = _std([float(x) for x in sent_word_lens]) if sent_word_lens else 0.0
-    cv_sent = (std_sent / mean_sent) if mean_sent > 0 else 0.0  # variação relativa
+    cv_sent = (std_sent / mean_sent) if mean_sent > 0 else 0.0
 
-    # conectores / palavras vagas
     low = t.lower()
     conn_hits = sum(len(re.findall(rf"\b{re.escape(c)}\b", low)) for c in AI_CONNECTORS)
     vague_hits = sum(len(re.findall(rf"\b{re.escape(v)}\b", low)) for v in AI_VAGUE_WORDS)
@@ -402,37 +373,22 @@ def analyze_ai_indicia(text: str) -> Dict:
     conn_per_1k = (conn_hits / max(1, word_count)) * 1000.0
     vague_per_1k = (vague_hits / max(1, word_count)) * 1000.0
 
-    # repetição local (tokens repetidos em janelas)
-    # mede quantas vezes a mesma palavra aparece em sequência curta (indicador de uniformidade)
     rep = 0
     for i in range(2, len(toks)):
         if toks[i] == toks[i-1] or toks[i] == toks[i-2]:
             rep += 1
     rep_per_1k = (rep / max(1, word_count)) * 1000.0
 
-    # índice heurístico (0..100)
-    # - baixa variação de frase (cv baixo) aumenta índice
-    # - conectores e vagueza aumentam índice
-    # - repetição aumenta índice
-    # - ttr muito baixa aumenta índice (vocabulário repetido)
     score = 0.0
-
-    # 1) uniformidade de sentença: cv < 0.55 tende a ser mais “padronizado”
     if cv_sent > 0:
         score += _clamp((0.55 - cv_sent) / 0.55, 0.0, 1.0) * 30.0
     else:
         score += 10.0
 
-    # 2) conectores (cap em 10 por 1k)
     score += _clamp(conn_per_1k / 10.0, 0.0, 1.0) * 20.0
-
-    # 3) vagueza (cap em 18 por 1k)
     score += _clamp(vague_per_1k / 18.0, 0.0, 1.0) * 20.0
-
-    # 4) repetição local (cap em 12 por 1k)
     score += _clamp(rep_per_1k / 12.0, 0.0, 1.0) * 15.0
 
-    # 5) diversidade lexical (ttr) — abaixo de 0.33 aumenta; acima reduz
     if ttr > 0:
         score += _clamp((0.33 - ttr) / 0.33, 0.0, 1.0) * 15.0
 
@@ -445,7 +401,6 @@ def analyze_ai_indicia(text: str) -> Dict:
     else:
         band = ("🟠 Elevada", "Sinais mais fortes de padronização. Revise conectores, generalidades e detalhe empírico.")
 
-    # trechos “sinalizáveis” simples (frases com muitos conectores/vagueza)
     flagged_sentences = []
     for s in sents[:400]:
         sl = s.lower()
@@ -462,8 +417,6 @@ def analyze_ai_indicia(text: str) -> Dict:
         "ttr": float(ttr),
         "mean_sent": float(mean_sent),
         "cv_sent": float(cv_sent),
-        "conn_hits": int(conn_hits),
-        "vague_hits": int(vague_hits),
         "conn_per_1k": float(conn_per_1k),
         "vague_per_1k": float(vague_per_1k),
         "rep_per_1k": float(rep_per_1k),
@@ -476,9 +429,9 @@ def analyze_ai_indicia(text: str) -> Dict:
 # =========================
 def _init_state():
     if "library" not in st.session_state:
-        st.session_state["library"] = {}  # name -> text
+        st.session_state["library"] = {}
     if "library_meta" not in st.session_state:
-        st.session_state["library_meta"] = {}  # name -> dict(tags, category, exclude)
+        st.session_state["library_meta"] = {}
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
     if "profile" not in st.session_state:
@@ -511,26 +464,19 @@ with st.container(border=True):
     st.caption(DISCL)
     st.caption(ETHICAL_NOTE)
 
-# =========================
-# Sidebar
-# =========================
 with st.sidebar:
     st.subheader("Modo de análise")
-
     st.session_state["profile"] = st.selectbox(
         "Perfil",
         list(PROFILES.keys()),
         index=list(PROFILES.keys()).index(st.session_state["profile"]),
-        help="Use 'Rigoroso' para cópia literal e 'Sensível' para paráfrase próxima.",
     )
-
     st.caption(
         f"{st.session_state['profile']} → "
         f"trecho {PROFILES[st.session_state['profile']]['chunk_words']} | "
         f"passo {PROFILES[st.session_state['profile']]['stride_words']} | "
         f"limiar {PROFILES[st.session_state['profile']]['threshold']}"
     )
-
     st.divider()
     st.subheader("Internet (opcional)")
     key = _get_serpapi_key()
@@ -538,8 +484,6 @@ with st.sidebar:
         st.success("SerpAPI key detectada ✅")
     else:
         st.caption("Modo Internet indisponível (SERPAPI_KEY não configurada).")
-
-    st.caption("Recomendado: manter o padrão (Biblioteca). Use Internet só quando fizer sentido.")
 
 tabs = st.tabs([
     "🧪 Biblioteca (privado)",
@@ -564,90 +508,51 @@ with tabs[0]:
                 horizontal=True,
                 key="radio_biblioteca_envio",
             )
-
             query_name = "Texto colado"
             query_text = ""
 
             if mode == "Colar texto":
-                query_text = st.text_area(
-                    "Cole o texto do trabalho/artigo:",
-                    height=280,
-                    placeholder="Cole seu texto aqui..."
-                )
+                query_text = st.text_area("Cole o texto do trabalho/artigo:", height=280, placeholder="Cole seu texto aqui...")
             else:
-                up = st.file_uploader(
-                    "Envie um arquivo (.docx, .pdf, .txt)",
-                    type=["docx", "pdf", "txt"],
-                    key="upl_biblioteca"
-                )
+                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="upl_biblioteca")
                 if up is not None:
                     query_name = up.name
-                    try:
-                        query_text = _read_any(up)
-                    except Exception as e:
-                        st.error(f"Não consegui ler o arquivo. Erro: {e}")
+                    query_text = _read_any(up)
 
             st.divider()
-            if not st.session_state["library"]:
-                st.warning("Sua biblioteca está vazia. Vá em **Biblioteca** e adicione fontes para comparar.")
-
-            run = st.button(
-                "🔎 Analisar (biblioteca)",
-                type="primary",
-                use_container_width=True,
-                disabled=(not query_text or not st.session_state["library"]),
-            )
+            run = st.button("🔎 Analisar (biblioteca)", type="primary", use_container_width=True,
+                            disabled=(not query_text or not st.session_state["library"]))
 
     with col2:
         with st.container(border=True):
             st.subheader("Resumo")
             wc = _safe_words_count(query_text)
             st.markdown(f"<span class='pill'>📄 {wc} palavras</span>", unsafe_allow_html=True)
-            st.write("A comparação é feita contra documentos da sua **Biblioteca Veritas** (modo privado).")
-            st.info("Dica: inclua trabalhos anteriores, artigos de referência, capítulos, etc.")
+            st.write("Comparação contra sua **Biblioteca Veritas** (modo privado).")
 
     if run:
         profile_params = PROFILES[st.session_state["profile"]]
-        chunk_words = int(profile_params["chunk_words"])
-        stride_words = int(profile_params["stride_words"])
-        threshold = float(profile_params["threshold"])
-        top_k_per_chunk = int(profile_params["top_k_per_chunk"])
+        corpus = {n: t for n, t in st.session_state["library"].items()
+                  if not st.session_state["library_meta"].get(n, {}).get("exclude", False)}
 
-        corpus = {}
-        for name, text in st.session_state["library"].items():
-            meta = st.session_state["library_meta"].get(name, {})
-            if meta.get("exclude", False):
-                continue
-            corpus[name] = text
+        global_sim, matches = compute_matches(
+            query_text=query_text,
+            corpus_docs=corpus,
+            chunk_words=int(profile_params["chunk_words"]),
+            stride_words=int(profile_params["stride_words"]),
+            top_k_per_chunk=int(profile_params["top_k_per_chunk"]),
+            threshold=float(profile_params["threshold"]),
+        )
 
-        if not corpus:
-            st.error("Todos os documentos da biblioteca estão marcados como excluídos. Ajuste na aba **Biblioteca**.")
-        else:
-            with st.spinner("Analisando similaridade na sua biblioteca..."):
-                global_sim, matches = compute_matches(
-                    query_text=query_text,
-                    corpus_docs=corpus,
-                    chunk_words=chunk_words,
-                    stride_words=stride_words,
-                    top_k_per_chunk=top_k_per_chunk,
-                    threshold=threshold,
-                )
-
-            st.session_state["last_result"] = {
-                "query_name": query_name,
-                "query_text": query_text,
-                "global_sim": float(global_sim),
-                "matches": matches,
-                "params": {
-                    "profile": st.session_state["profile"],
-                    "chunk_words": chunk_words,
-                    "stride_words": stride_words,
-                    "threshold": threshold,
-                    "top_k_per_chunk": top_k_per_chunk,
-                },
-                "corpus_size": len(corpus),
-                "ts": int(time.time()),
-            }
+        st.session_state["last_result"] = {
+            "query_name": query_name,
+            "query_text": query_text,
+            "global_sim": float(global_sim),
+            "matches": matches,
+            "params": {"profile": st.session_state["profile"], **profile_params},
+            "corpus_size": len(corpus),
+            "ts": int(time.time()),
+        }
 
     res = st.session_state.get("last_result")
     if res:
@@ -656,70 +561,36 @@ with tabs[0]:
 
         global_sim = float(res.get("global_sim", 0.0))
         band_title, band_msg = _band(global_sim)
-
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric("Índice global", f"{global_sim*100:.1f}%")
-        with m2:
-            st.metric("Docs comparados", f"{res.get('corpus_size', 0)}")
-        with m3:
-            st.metric("Trechos sinalizados", f"{len(res.get('matches') or [])}")
-
         st.info(f"**{band_title}** — {band_msg}")
 
         left, right = st.columns([1, 1], gap="large")
         with left:
-            with st.container(border=True):
-                st.markdown("### Trechos sinalizados")
-                matches = res.get("matches") or []
-                if not matches:
-                    st.success("Nenhuma correspondência acima do limiar foi encontrada.")
-                else:
-                    for i, m in enumerate(matches[:20], start=1):
-                        st.markdown(f"**{i}.** `{m.source_doc}` — **{m.score*100:.1f}%**")
-                        st.caption("Trecho analisado")
-                        st.write(m.query_chunk)
-                        st.caption("Trecho fonte")
-                        st.write(m.source_chunk)
-                        st.divider()
+            matches = res.get("matches") or []
+            for i, m in enumerate(matches[:20], start=1):
+                st.markdown(f"**{i}.** `{m.source_doc}` — **{m.score*100:.1f}%**")
+                st.write(m.query_chunk)
+                st.write(m.source_chunk)
+                st.divider()
 
         with right:
-            with st.container(border=True):
-                st.markdown("### Texto com destaques")
-                highlighted = highlight_text(res["query_text"], res.get("matches") or [])
-                st.text_area("Destaques aparecem entre ⟦ ⟧", value=highlighted, height=420)
+            highlighted = highlight_text(res["query_text"], res.get("matches") or [])
+            st.text_area("Destaques (⟦ ⟧)", value=highlighted, height=360)
 
-                st.markdown("### Relatório (PDF)")
-                pdf_path = os.path.join(os.getcwd(), f"Relatorio_Veritas_{res.get('ts', int(time.time()))}.pdf")
-
-                band_title, band_msg = _band(res["global_sim"])
-                disclaimer_plus = (
-                    DISCL
-                    + "\n\n"
-                    + ETHICAL_NOTE
-                    + "\n\n"
-                    + f"Perfil usado: {res['params'].get('profile')}\n"
-                    + f"Leitura interpretativa (faixa): {band_title} — {band_msg}"
-                )
-
-                generate_pdf_report(
-                    filepath=pdf_path,
-                    title="Relatório de Análise de Similaridade – Veritas",
-                    query_name=res["query_name"],
-                    global_similarity=res["global_sim"],
-                    matches=res.get("matches") or [],
-                    params=res.get("params") or {},
-                    disclaimer=disclaimer_plus,
-                )
-
-                with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        "⬇️ Baixar relatório em PDF",
-                        data=f.read(),
-                        file_name=os.path.basename(pdf_path),
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
+            # PDF Biblioteca (já tinha)
+            pdf_path = os.path.join(os.getcwd(), f"Relatorio_Veritas_{res.get('ts', int(time.time()))}.pdf")
+            generate_pdf_report(
+                filepath=pdf_path,
+                title="Relatório de Análise de Similaridade – Veritas",
+                query_name=res["query_name"],
+                global_similarity=res["global_sim"],
+                matches=res.get("matches") or [],
+                params=res.get("params") or {},
+                disclaimer=DISCL + "\n\n" + ETHICAL_NOTE,
+            )
+            with open(pdf_path, "rb") as f:
+                st.download_button("⬇️ Baixar relatório (Biblioteca) em PDF", data=f.read(),
+                                   file_name=os.path.basename(pdf_path), mime="application/pdf", use_container_width=True,
+                                   key="dl_pdf_bib")
 
 # =========================================================
 # TAB 2: Internet (externo)
@@ -732,116 +603,79 @@ with tabs[1]:
     if not serp_key:
         st.error("Modo Internet indisponível: configure `SERPAPI_KEY` nos secrets.")
     else:
-        with st.container(border=True):
-            st.markdown(
-                "**Como funciona:** o Veritas envia *trechos curtos* do seu texto para busca "
-                "e compara com snippets retornados."
-            )
-            consent = st.checkbox(
-                "✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.",
-                value=False,
-                key="internet_consent",
-            )
+        consent = st.checkbox("✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.", value=False, key="internet_consent")
+        mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True, key="radio_internet_envio")
 
-            st.divider()
+        query_name = "Texto colado"
+        query_text = ""
 
-            mode = st.radio(
-                "Como enviar o texto?",
-                ["Colar texto", "Enviar arquivo"],
-                horizontal=True,
-                key="radio_internet_envio",
-            )
-            query_name = "Texto colado"
-            query_text = ""
+        if mode == "Colar texto":
+            query_text = st.text_area("Cole o texto para checar na internet:", height=220, key="internet_text")
+        else:
+            up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="internet_uploader")
+            if up is not None:
+                query_name = up.name
+                query_text = _read_any(up)
 
-            if mode == "Colar texto":
-                query_text = st.text_area(
-                    "Cole o texto para checar na internet:",
-                    height=240,
-                    placeholder="Cole seu texto aqui...",
-                    key="internet_text",
-                )
-            else:
-                up = st.file_uploader(
-                    "Envie um arquivo (.docx, .pdf, .txt)",
-                    type=["docx", "pdf", "txt"],
-                    key="internet_uploader",
-                )
-                if up is not None:
-                    query_name = up.name
-                    try:
-                        query_text = _read_any(up)
-                    except Exception as e:
-                        st.error(f"Não consegui ler o arquivo. Erro: {e}")
+        colA, colB = st.columns(2)
+        with colA:
+            num_chunks = st.slider("Trechos enviados (menos = mais privado)", 3, 18, 10, 1, key="internet_chunks")
+        with colB:
+            num_results = st.slider("Resultados por trecho", 3, 10, 5, 1, key="internet_results")
 
-            colA, colB = st.columns(2)
-            with colA:
-                num_chunks = st.slider(
-                    "Quantidade de trechos enviados (menos = mais privado)",
-                    3, 18, 10, 1,
-                    key="internet_chunks",
-                )
-            with colB:
-                num_results = st.slider(
-                    "Resultados por trecho",
-                    3, 10, 5, 1,
-                    key="internet_results",
-                )
-
-            run_web = st.button(
-                "🔎 Buscar na internet",
-                type="primary",
-                use_container_width=True,
-                disabled=(not consent or not query_text),
-                key="btn_web",
-            )
+        run_web = st.button("🔎 Buscar na internet", type="primary", use_container_width=True,
+                            disabled=(not consent or not query_text), key="btn_web")
 
         if run_web:
             profile_params = PROFILES[st.session_state["profile"]]
-            with st.spinner("Buscando na web (SerpAPI) e comparando snippets..."):
-                hits = web_similarity_scan(
-                    text=query_text,
-                    serpapi_key=serp_key,
-                    profile_params=profile_params,
-                    num_chunks=int(num_chunks),
-                    num_results=int(num_results),
-                    max_final_hits=20,
-                )
-
+            hits = web_similarity_scan(
+                text=query_text,
+                serpapi_key=serp_key,
+                profile_params=profile_params,
+                num_chunks=int(num_chunks),
+                num_results=int(num_results),
+                max_final_hits=20,
+            )
             st.session_state["internet_last"] = {
                 "query_name": query_name,
                 "profile": st.session_state["profile"],
                 "hits": hits,
                 "ts": int(time.time()),
-                "num_chunks": int(num_chunks),
-                "num_results": int(num_results),
             }
 
         webres = st.session_state.get("internet_last")
         if webres:
-            st.divider()
-            st.subheader("Resultado (Internet)")
-
             hits: List[WebHit] = webres["hits"] or []
-            if not hits:
-                st.warning("Não encontrei resultados relevantes (ou ocorreu erro). Tente aumentar trechos/resultados.")
-            else:
-                top = hits[:10]
-                global_web = sum(h.score for h in top) / max(1, len(top))
-                st.metric("Índice web (heurístico)", f"{global_web*100:.1f}%")
-                st.caption("Índice heurístico baseado em snippets — não é prova conclusiva.")
+            top = hits[:10]
+            global_web = sum(h.score for h in top) / max(1, len(top))
+            st.metric("Índice web (heurístico)", f"{global_web*100:.1f}%")
 
-                st.markdown("### Principais correspondências encontradas")
-                for i, h in enumerate(hits[:20], start=1):
-                    st.markdown(f"**{i}. {h.title or '(sem título)'}** — **{h.score*100:.1f}%**")
-                    if h.link:
-                        st.write(h.link)
-                    if h.snippet:
-                        st.caption("Snippet da web")
-                        st.write(h.snippet)
-                    with st.expander("Trecho do seu texto enviado (chunk)", expanded=False):
-                        st.write(h.chunk)
-                    st.divider()
+            for i, h in enumerate(hits[:20], start=1):
+                st.markdown(f"**{i}. {h.title}** — **{h.score*100:.1f}%**")
+                st.write(h.link)
+                st.write(h.snippet)
+                with st.expander("Chunk enviado"):
+                    st.write(h.chunk)
+                st.divider()
+
+            # PDF Internet
+            pdf_path_web = os.path.join(os.getcwd(), f"Relatorio_Veritas_Internet_{webres.get('ts', int(time.time()))}.pdf")
+            generate_web_pdf_report(
+                filepath=pdf_path_web,
+                title="Relatório de Similaridade – Internet (Veritas)",
+                query_name=webres.get("query_name", "—"),
+                profile=webres.get("profile", "—"),
+                global_web_score=global_web,
+                hits=hits,
+                disclaimer=(
+                    "Este relatório é baseado em snippets e resultados públicos retornados por busca. "
+                    "Ele não comprova autoria ou plágio; serve como apoio de revisão e checagem contextual."
+                ),
+            )
+            with open(pdf_path_web, "rb") as f:
+                st.download_button("⬇️ Baixar relatório (Internet) em PDF", data=f.read(),
+                                   file_name=os.path.basename(pdf_path_web), mime="application/pdf",
+                                   use_container_width=True, key="dl_pdf_web")
 
 # =========================================================
 # TAB 3: Indícios de Uso de IA (análise heurística)
@@ -850,177 +684,88 @@ with tabs[2]:
     st.subheader("Indícios de Uso de IA (análise heurística)")
     st.info(AI_HEURISTIC_NOTE)
 
-    col1, col2 = st.columns([1.15, 0.85], gap="large")
+    mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True, key="radio_ai_envio")
+    query_name = "Texto colado"
+    query_text = ""
 
-    with col1:
-        with st.container(border=True):
-            st.subheader("Texto para análise")
-            mode = st.radio(
-                "Como enviar o texto?",
-                ["Colar texto", "Enviar arquivo"],
-                horizontal=True,
-                key="radio_ai_envio",
-            )
+    if mode == "Colar texto":
+        query_text = st.text_area("Cole o texto para análise heurística:", height=240, key="ai_text")
+    else:
+        up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="ai_uploader")
+        if up is not None:
+            query_name = up.name
+            query_text = _read_any(up)
 
-            query_name = "Texto colado"
-            query_text = ""
-
-            if mode == "Colar texto":
-                query_text = st.text_area(
-                    "Cole o texto para análise heurística:",
-                    height=260,
-                    placeholder="Cole seu texto aqui...",
-                    key="ai_text",
-                )
-            else:
-                up = st.file_uploader(
-                    "Envie um arquivo (.docx, .pdf, .txt)",
-                    type=["docx", "pdf", "txt"],
-                    key="ai_uploader",
-                )
-                if up is not None:
-                    query_name = up.name
-                    try:
-                        query_text = _read_any(up)
-                    except Exception as e:
-                        st.error(f"Não consegui ler o arquivo. Erro: {e}")
-
-            run_ai = st.button(
-                "🤖 Rodar análise heurística",
-                type="primary",
-                use_container_width=True,
-                disabled=(not query_text),
-                key="btn_ai",
-            )
-
-    with col2:
-        with st.container(border=True):
-            wc = _safe_words_count(query_text)
-            st.subheader("Resumo")
-            st.markdown(f"<span class='pill'>📄 {wc} palavras</span>", unsafe_allow_html=True)
-            st.caption(
-                "Este módulo **não envia** o texto para a internet. "
-                "Ele calcula métricas locais de padronização/robustez."
-            )
+    run_ai = st.button("🤖 Rodar análise heurística", type="primary", use_container_width=True,
+                       disabled=(not query_text), key="btn_ai")
 
     if run_ai:
-        with st.spinner("Calculando indícios heurísticos..."):
-            ai = analyze_ai_indicia(query_text)
-        st.session_state["ai_last"] = {
-            "query_name": query_name,
-            "ts": int(time.time()),
-            "ai": ai,
-        }
+        ai = analyze_ai_indicia(query_text)
+        st.session_state["ai_last"] = {"query_name": query_name, "ts": int(time.time()), "ai": ai}
 
     aires = st.session_state.get("ai_last")
     if aires:
-        st.divider()
         ai = aires["ai"]
-
         band_title, band_msg = ai["band"]
-
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric("Índice heurístico", f"{ai['score']:.0f}/100")
-        with m2:
-            st.metric("Palavras", f"{ai['word_count']}")
-        with m3:
-            st.metric("Frases", f"{ai['sent_count']}")
-
+        st.metric("Índice heurístico", f"{ai['score']:.0f}/100")
         st.info(f"**{band_title}** — {band_msg}")
 
-        with st.container(border=True):
-            st.markdown("### Indicadores (interpretação)")
-            st.write(f"• **Diversidade lexical (TTR)**: {ai['ttr']:.2f} (mais alto tende a ser mais variado)")
-            st.write(f"• **Média de palavras por frase**: {ai['mean_sent']:.1f}")
-            st.write(f"• **Variação entre frases (CV)**: {ai['cv_sent']:.2f} (mais baixo = mais uniforme)")
-            st.write(f"• **Conectores por 1.000 palavras**: {ai['conn_per_1k']:.1f}")
-            st.write(f"• **Generalidades/vagueza por 1.000 palavras**: {ai['vague_per_1k']:.1f}")
-            st.write(f"• **Repetição local por 1.000 palavras**: {ai['rep_per_1k']:.1f}")
+        st.write(f"- TTR: {ai['ttr']:.2f}")
+        st.write(f"- CV (variação de frases): {ai['cv_sent']:.2f}")
+        st.write(f"- Conectores/1k: {ai['conn_per_1k']:.1f}")
+        st.write(f"- Vagueza/1k: {ai['vague_per_1k']:.1f}")
+        st.write(f"- Repetição/1k: {ai['rep_per_1k']:.1f}")
 
-        flagged = ai.get("flagged_sentences") or []
-        if flagged:
-            with st.container(border=True):
-                st.markdown("### Trechos para revisão (heurístico)")
-                st.caption("Frases com maior presença de conectores/generalidades (sugestão: inserir fonte, dado, exemplo, recorte).")
-                for i, s in enumerate(flagged, start=1):
-                    st.write(f"**{i}.** {s}")
+        if ai.get("flagged_sentences"):
+            st.markdown("### Trechos para revisão")
+            for i, s in enumerate(ai["flagged_sentences"], start=1):
+                st.write(f"**{i}.** {s}")
+
+        # PDF IA
+        pdf_path_ai = os.path.join(os.getcwd(), f"Relatorio_Veritas_IA_{aires.get('ts', int(time.time()))}.pdf")
+        generate_ai_pdf_report(
+            filepath=pdf_path_ai,
+            title="Relatório – Indícios de Uso de IA (análise heurística) – Veritas",
+            query_name=aires.get("query_name", "—"),
+            ai_result=ai,
+            disclaimer=AI_HEURISTIC_NOTE,
+        )
+        with open(pdf_path_ai, "rb") as f:
+            st.download_button("⬇️ Baixar relatório (IA – heurístico) em PDF", data=f.read(),
+                               file_name=os.path.basename(pdf_path_ai), mime="application/pdf",
+                               use_container_width=True, key="dl_pdf_ai")
 
 # =========================================================
 # TAB 4: Biblioteca (upload)
 # =========================================================
 with tabs[3]:
     st.subheader("Biblioteca Veritas")
-    st.write("Os documentos aqui são as **fontes de comparação** (modo privado).")
+    up_lib = st.file_uploader(
+        "Adicionar documentos (.docx, .pdf, .txt)",
+        type=["docx", "pdf", "txt"],
+        accept_multiple_files=True,
+        key="upl_lib",
+    )
 
-    with st.container(border=True):
-        up_lib = st.file_uploader(
-            "Adicionar documentos (.docx, .pdf, .txt)",
-            type=["docx", "pdf", "txt"],
-            accept_multiple_files=True,
-            key="upl_lib",
-        )
-
-        if up_lib:
-            added = 0
-            for f in up_lib:
-                try:
-                    st.session_state["library"][f.name] = _read_any(f)
-                    st.session_state["library_meta"].setdefault(
-                        f.name, {"tags": "", "category": "Referência", "exclude": False}
-                    )
-                    added += 1
-                except Exception as e:
-                    st.error(f"Falha ao ler {f.name}: {e}")
-            if added:
-                st.success(f"{added} documento(s) adicionados.")
+    if up_lib:
+        for f in up_lib:
+            st.session_state["library"][f.name] = _read_any(f)
+            st.session_state["library_meta"].setdefault(f.name, {"tags": "", "category": "Referência", "exclude": False})
+        st.success("Documentos adicionados.")
 
     st.divider()
     if st.session_state["library"]:
-        st.markdown("### Documentos na biblioteca")
         for name in list(st.session_state["library"].keys()):
-            meta = st.session_state["library_meta"].setdefault(
-                name, {"tags": "", "category": "Referência", "exclude": False}
-            )
-
-            with st.container(border=True):
-                c1, c2, c3, c4 = st.columns([0.42, 0.22, 0.24, 0.12], vertical_alignment="center")
-
-                with c1:
-                    st.write(f"📄 **{name}**")
-                    st.caption(f"{_safe_words_count(st.session_state['library'][name])} palavras")
-
-                with c2:
-                    meta["category"] = st.selectbox(
-                        "Categoria",
-                        ["Referência", "Meu texto (autoria)", "Domínio público", "Modelo/metodologia", "Outros"],
-                        index=["Referência", "Meu texto (autoria)", "Domínio público", "Modelo/metodologia", "Outros"].index(
-                            meta.get("category", "Referência")
-                            if meta.get("category") in ["Referência", "Meu texto (autoria)", "Domínio público", "Modelo/metodologia", "Outros"]
-                            else "Referência"
-                        ),
-                        key=f"cat_{name}",
-                    )
-
-                with c3:
-                    meta["tags"] = st.text_input(
-                        "Tags",
-                        value=meta.get("tags", ""),
-                        placeholder="ex.: penal; rogers; método",
-                        key=f"tags_{name}",
-                    )
-                    meta["exclude"] = st.checkbox(
-                        "Excluir da comparação",
-                        value=bool(meta.get("exclude", False)),
-                        key=f"exc_{name}",
-                        help="Exclui do cálculo e das buscas na biblioteca.",
-                    )
-
-                with c4:
-                    if st.button("Remover", key=f"rm_{name}", use_container_width=True):
-                        st.session_state["library"].pop(name, None)
-                        st.session_state["library_meta"].pop(name, None)
-                        st.rerun()
+            meta = st.session_state["library_meta"].setdefault(name, {"tags": "", "category": "Referência", "exclude": False})
+            c1, c2 = st.columns([0.8, 0.2])
+            with c1:
+                st.write(f"📄 {name}")
+                meta["exclude"] = st.checkbox("Excluir", value=bool(meta.get("exclude", False)), key=f"exc_{name}")
+            with c2:
+                if st.button("Remover", key=f"rm_{name}"):
+                    del st.session_state["library"][name]
+                    st.session_state["library_meta"].pop(name, None)
+                    st.rerun()
     else:
         st.info("Ainda não há documentos na biblioteca.")
 
