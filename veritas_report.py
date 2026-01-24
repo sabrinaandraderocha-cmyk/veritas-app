@@ -55,7 +55,7 @@ def _draw_section_title(c: canvas.Canvas, margin: float, y: float, txt: str) -> 
 
 
 # =========================================================
-# PDF 1) Biblioteca (já existente)
+# PDF 1) Biblioteca
 # =========================================================
 def generate_pdf_report(
     filepath: str,
