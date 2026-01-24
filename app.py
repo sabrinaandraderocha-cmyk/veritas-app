@@ -71,6 +71,7 @@ PROFILES = {
     "Sensível (paráfrase próxima)": {"chunk_words": 50, "stride_words": 20, "threshold": 0.66, "top_k_per_chunk": 1},
 }
 
+
 # =========================
 # Leitura
 # =========================
@@ -95,9 +96,6 @@ def _band(global_sim: float):
         return "🟡 Atenção editorial (moderada)", "Pode refletir trechos comuns. Revise seções sinalizadas."
     return "🟠 Revisão cuidadosa (elevada)", "Não é acusação. Há sobreposição relevante: revise trechos e citações."
 
-# =========================
-# CSS leve
-# =========================
 def _inject_css():
     st.markdown(
         """
@@ -112,6 +110,7 @@ def _inject_css():
         """,
         unsafe_allow_html=True,
     )
+
 
 # =========================
 # INTERNET: SerpAPI
@@ -213,8 +212,7 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> List[Dict]:
-    import requests  # precisa estar no requirements.txt
-
+    import requests
     q = f"\"{chunk}\"" if len(chunk) >= 80 else chunk
     params = {
         "engine": "google",
@@ -224,11 +222,9 @@ def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> 
         "hl": "pt",
         "gl": "br",
     }
-
     r = requests.get("https://serpapi.com/search.json", params=params, timeout=25)
     r.raise_for_status()
     data = r.json()
-
     results = data.get("organic_results", []) or []
     cleaned = []
     for it in results[:num_results]:
@@ -245,8 +241,8 @@ def web_similarity_scan(
     text: str,
     serpapi_key: str,
     profile_params: dict,
-    num_chunks: int = 10,
-    num_results: int = 5,
+    num_chunks: int,
+    num_results: int,
     max_final_hits: int = 20,
 ) -> List[WebHit]:
     chunks = build_chunks(
@@ -644,7 +640,7 @@ with tabs[0]:
                 )
 
 # =========================================================
-# TAB 2: Internet (externo) — agora com preset + avançado opcional
+# TAB 2: Internet (externo) — SEM “opções avançadas”
 # =========================================================
 with tabs[1]:
     st.subheader("Similaridade na Internet (modo externo)")
@@ -674,10 +670,6 @@ with tabs[1]:
             num_chunks, num_results = 14, 6
         else:
             num_chunks, num_results = 10, 5
-
-        with st.expander("Opções avançadas (opcional)", expanded=False):
-            num_chunks = st.slider("Trechos enviados", 3, 18, int(num_chunks), 1, key="internet_chunks_adv")
-            num_results = st.slider("Resultados por trecho", 3, 10, int(num_results), 1, key="internet_results_adv")
 
         mode = st.radio(
             "Como enviar o texto?",
@@ -783,7 +775,7 @@ with tabs[1]:
                         )
 
 # =========================================================
-# TAB 3: IA — interpretação humana + métricas opcionais + PDF + Word
+# TAB 3: IA (humano + PDF + Word)
 # =========================================================
 with tabs[2]:
     st.subheader("Indícios de Uso de IA (análise heurística)")
@@ -850,7 +842,7 @@ with tabs[2]:
             for i, s in enumerate(ai["flagged_sentences"], start=1):
                 st.write(f"**{i}.** {s}")
 
-        # PDF IA (com interpretação junto no disclaimer)
+        # PDF IA
         if generate_ai_pdf_report is None:
             st.warning("Relatório PDF (IA) indisponível: atualize `veritas_report.py` no deploy.")
         else:
@@ -878,7 +870,7 @@ with tabs[2]:
                     key="dl_pdf_ai",
                 )
 
-        # WORD IA (DOCX)
+        # Word IA
         if generate_ai_docx_report is None:
             st.caption("Relatório Word (IA) indisponível: atualize `veritas_report.py` (generate_ai_docx_report).")
         else:
