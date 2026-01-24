@@ -16,7 +16,7 @@ from veritas_utils import (
     highlight_text,
 )
 
-# --- PDFs (robusto para não quebrar no Cloud) ---
+# --- PDFs/DOCX (robusto para não quebrar no Cloud) ---
 from veritas_report import generate_pdf_report
 
 try:
@@ -24,6 +24,11 @@ try:
 except Exception:
     generate_web_pdf_report = None
     generate_ai_pdf_report = None
+
+try:
+    from veritas_report import generate_ai_docx_report
+except Exception:
+    generate_ai_docx_report = None
 
 
 # =========================
@@ -58,7 +63,7 @@ AI_HEURISTIC_NOTE = (
 )
 
 # =========================
-# PERFIS (substituem sliders)
+# PERFIS
 # =========================
 PROFILES = {
     "Rápido (padrão)": {"chunk_words": 60, "stride_words": 25, "threshold": 0.75, "top_k_per_chunk": 1},
@@ -66,9 +71,8 @@ PROFILES = {
     "Sensível (paráfrase próxima)": {"chunk_words": 50, "stride_words": 20, "threshold": 0.66, "top_k_per_chunk": 1},
 }
 
-
 # =========================
-# Leitura de arquivos
+# Leitura
 # =========================
 def _read_any(uploaded_file) -> str:
     name = uploaded_file.name.lower()
@@ -81,10 +85,8 @@ def _read_any(uploaded_file) -> str:
         return extract_text_from_pdf_bytes(b)
     return extract_text_from_txt_bytes(b)
 
-
 def _safe_words_count(text: str) -> int:
     return len(re.findall(r"\S+", text or ""))
-
 
 def _band(global_sim: float):
     if global_sim < 0.15:
@@ -93,35 +95,26 @@ def _band(global_sim: float):
         return "🟡 Atenção editorial (moderada)", "Pode refletir trechos comuns. Revise seções sinalizadas."
     return "🟠 Revisão cuidadosa (elevada)", "Não é acusação. Há sobreposição relevante: revise trechos e citações."
 
-
 # =========================
-# UX: CSS leve
+# CSS leve
 # =========================
 def _inject_css():
     st.markdown(
         """
         <style>
           .muted { opacity: 0.75; }
-          .card {
-            padding: 1rem; border-radius: 14px;
-            border: 1px solid rgba(49,51,63,0.18);
-            background: rgba(255,255,255,0.02);
-          }
           .pill {
             display:inline-block; padding: 0.18rem 0.55rem; border-radius: 999px;
             border: 1px solid rgba(49,51,63,0.18); margin-right: 0.35rem;
           }
-          .tight h3 { margin-bottom: 0.2rem; }
-          .tight p { margin-top: 0.2rem; }
           code { white-space: pre-wrap; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-
 # =========================
-# INTERNET: SerpAPI (ranking melhorado)
+# INTERNET: SerpAPI
 # =========================
 def _get_serpapi_key() -> Optional[str]:
     key = None
@@ -133,10 +126,8 @@ def _get_serpapi_key() -> Optional[str]:
         key = os.getenv("SERPAPI_KEY")
     return key
 
-
 def _split_words(text: str) -> List[str]:
     return re.findall(r"[A-Za-zÀ-ÿ0-9]+", (text or "").lower())
-
 
 def build_chunks(text: str, chunk_words: int, stride_words: int, max_chunks: int = 12) -> List[str]:
     words = _split_words(text)
@@ -159,14 +150,12 @@ def build_chunks(text: str, chunk_words: int, stride_words: int, max_chunks: int
             seen.add(k)
     return uniq
 
-
 def seq_similarity(a: str, b: str) -> float:
     a = (a or "").strip().lower()
     b = (b or "").strip().lower()
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(None, a, b).ratio()
-
 
 @dataclass
 class WebHit:
@@ -175,7 +164,6 @@ class WebHit:
     snippet: str
     score: float
     chunk: str
-
 
 TRUST_BOOST_DOMAINS = [
     "scielo", "periodicos.capes", "pubmed", "ncbi.nlm.nih.gov",
@@ -189,14 +177,12 @@ PENALIZE_DOMAINS = [
     "resumos", "blogspot", "wordpress", "medium.com", "reddit.com"
 ]
 
-
 def _domain_of(url: str) -> str:
     try:
         netloc = urlparse(url).netloc.lower()
         return netloc.replace("www.", "")
     except Exception:
         return ""
-
 
 def _domain_weight(domain: str) -> float:
     d = (domain or "").lower()
@@ -212,7 +198,6 @@ def _domain_weight(domain: str) -> float:
             return 0.82
     return 1.0
 
-
 def _snippet_quality(snippet: str) -> float:
     s = (snippet or "").strip()
     n = len(s)
@@ -224,10 +209,8 @@ def _snippet_quality(snippet: str) -> float:
         return 1.00
     return 1.06
 
-
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
-
 
 def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> List[Dict]:
     import requests  # precisa estar no requirements.txt
@@ -257,7 +240,6 @@ def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> 
             }
         )
     return cleaned
-
 
 def web_similarity_scan(
     text: str,
@@ -321,14 +303,13 @@ def web_similarity_scan(
 
 
 # =========================
-# INDÍCIOS DE USO DE IA (HEURÍSTICO)
+# IA: heurística + explicação humana
 # =========================
 AI_CONNECTORS = [
     "além disso", "dessa forma", "nesse sentido", "por fim", "em suma", "portanto",
     "assim", "logo", "contudo", "entretanto", "todavia", "outrossim", "desse modo",
     "vale destacar", "é importante destacar", "cabe ressaltar"
 ]
-
 AI_VAGUE_WORDS = [
     "importante", "relevante", "significativo", "notável", "essencial", "fundamental",
     "diversos", "vários", "muitos", "alguns", "inúmeros", "de certa forma",
@@ -424,6 +405,44 @@ def analyze_ai_indicia(text: str) -> Dict:
         "flagged_sentences": flagged_sentences[:12],
     }
 
+def ai_friendly_explain(ai: dict) -> List[str]:
+    score = float(ai.get("score", 0))
+    cv = float(ai.get("cv_sent", 0))
+    ttr = float(ai.get("ttr", 0))
+    conn = float(ai.get("conn_per_1k", 0))
+    vague = float(ai.get("vague_per_1k", 0))
+    rep = float(ai.get("rep_per_1k", 0))
+
+    lines = []
+
+    if score < 33:
+        lines.append("O texto mostra poucos indícios de padronização. Se houver uso de IA, tende a ter sido leve ou bem revisado.")
+    elif score < 66:
+        lines.append("O texto tem sinais moderados de padronização. Pode ser estilo acadêmico “modelado” ou assistência de IA.")
+    else:
+        lines.append("O texto está bem padronizado. Isso pode ocorrer com IA/assistência intensa ou escrita muito “template”. Vale revisar com calma.")
+
+    actions = []
+    if vague >= 2.5:
+        actions.append("Troque trechos genéricos por exemplos, dados, recortes temporais e citações.")
+    if conn >= 6:
+        actions.append("Varie conectores (ex.: ‘além disso’) e reescreva inícios repetidos de parágrafo.")
+    if rep >= 10:
+        actions.append("Revise repetição de palavras próximas e use sinônimos/explicitações.")
+    if ttr < 0.18:
+        actions.append("Aumente a variedade de vocabulário (sinônimos, termos específicos do tema).")
+    if cv < 0.45:
+        actions.append("Misture frases curtas e longas para dar ritmo e marca autoral.")
+
+    if not actions:
+        actions = ["Mantenha revisão de fontes, precisão conceitual e exemplos concretos (isso fortalece autoria)."]
+
+    lines.append("O que fazer agora:")
+    for a in actions[:3]:
+        lines.append(f"• {a}")
+
+    return lines
+
 
 # =========================
 # State
@@ -452,7 +471,7 @@ _inject_css()
 
 st.markdown(
     f"""
-    <div class="tight">
+    <div>
       <h1>{APP_TITLE}</h1>
       <p class="muted">Análise de similaridade e integridade acadêmica</p>
     </div>
@@ -625,7 +644,7 @@ with tabs[0]:
                 )
 
 # =========================================================
-# TAB 2: Internet (externo)
+# TAB 2: Internet (externo) — agora com preset + avançado opcional
 # =========================================================
 with tabs[1]:
     st.subheader("Similaridade na Internet (modo externo)")
@@ -640,6 +659,26 @@ with tabs[1]:
             value=False,
             key="internet_consent",
         )
+
+        preset = st.selectbox(
+            "Nível de privacidade",
+            ["Mais privado", "Equilibrado (recomendado)", "Mais completo"],
+            index=1,
+            help="Mais privado envia menos trechos. Mais completo aumenta chance de encontrar correspondências.",
+            key="internet_priv_preset",
+        )
+
+        if preset == "Mais privado":
+            num_chunks, num_results = 5, 4
+        elif preset == "Mais completo":
+            num_chunks, num_results = 14, 6
+        else:
+            num_chunks, num_results = 10, 5
+
+        with st.expander("Opções avançadas (opcional)", expanded=False):
+            num_chunks = st.slider("Trechos enviados", 3, 18, int(num_chunks), 1, key="internet_chunks_adv")
+            num_results = st.slider("Resultados por trecho", 3, 10, int(num_results), 1, key="internet_results_adv")
+
         mode = st.radio(
             "Como enviar o texto?",
             ["Colar texto", "Enviar arquivo"],
@@ -665,12 +704,6 @@ with tabs[1]:
                 except Exception as e:
                     st.error(f"Não consegui ler o arquivo. Erro: {e}")
 
-        colA, colB = st.columns(2)
-        with colA:
-            num_chunks = st.slider("Trechos enviados (menos = mais privado)", 3, 18, 10, 1, key="internet_chunks")
-        with colB:
-            num_results = st.slider("Resultados por trecho", 3, 10, 5, 1, key="internet_results")
-
         run_web = st.button(
             "🔎 Buscar na internet",
             type="primary",
@@ -694,13 +727,16 @@ with tabs[1]:
                 "profile": st.session_state["profile"],
                 "hits": hits,
                 "ts": int(time.time()),
+                "preset": preset,
+                "num_chunks": int(num_chunks),
+                "num_results": int(num_results),
             }
 
         webres = st.session_state.get("internet_last")
         if webres:
             hits: List[WebHit] = webres["hits"] or []
             if not hits:
-                st.warning("Não encontrei resultados relevantes. Tente aumentar trechos/resultados.")
+                st.warning("Não encontrei resultados relevantes. Tente o modo “Mais completo”.")
             else:
                 top = hits[:10]
                 global_web = sum(h.score for h in top) / max(1, len(top))
@@ -712,11 +748,10 @@ with tabs[1]:
                         st.write(h.link)
                     if h.snippet:
                         st.write(h.snippet)
-                    with st.expander("Chunk enviado", expanded=False):
+                    with st.expander("Trecho enviado (chunk)", expanded=False):
                         st.write(h.chunk)
                     st.divider()
 
-                # PDF Internet
                 if generate_web_pdf_report is None:
                     st.warning("Relatório PDF (Internet) indisponível: atualize `veritas_report.py` no deploy.")
                 else:
@@ -733,7 +768,8 @@ with tabs[1]:
                         hits=hits,
                         disclaimer=(
                             "Este relatório é baseado em snippets e resultados públicos retornados por busca. "
-                            "Ele não comprova autoria ou plágio; serve como apoio de revisão e checagem contextual."
+                            "Ele não comprova autoria ou plágio; serve como apoio de revisão e checagem contextual.\n\n"
+                            f"Configuração usada: {webres.get('preset')} (trechos={webres.get('num_chunks')}, resultados/trecho={webres.get('num_results')})."
                         ),
                     )
                     with open(pdf_path_web, "rb") as f:
@@ -747,7 +783,7 @@ with tabs[1]:
                         )
 
 # =========================================================
-# TAB 3: Indícios de Uso de IA (análise heurística)
+# TAB 3: IA — interpretação humana + métricas opcionais + PDF + Word
 # =========================================================
 with tabs[2]:
     st.subheader("Indícios de Uso de IA (análise heurística)")
@@ -797,18 +833,24 @@ with tabs[2]:
         st.metric("Índice heurístico", f"{ai['score']:.0f}/100")
         st.info(f"**{band_title}** — {band_msg}")
 
-        st.write(f"- TTR: {ai['ttr']:.2f}")
-        st.write(f"- CV (variação de frases): {ai['cv_sent']:.2f}")
-        st.write(f"- Conectores/1k: {ai['conn_per_1k']:.1f}")
-        st.write(f"- Vagueza/1k: {ai['vague_per_1k']:.1f}")
-        st.write(f"- Repetição/1k: {ai['rep_per_1k']:.1f}")
+        st.markdown("### Interpretação (orientativa)")
+        friendly_lines = ai_friendly_explain(ai)
+        for line in friendly_lines:
+            st.write(line)
+
+        with st.expander("Ver métricas técnicas (opcional)", expanded=False):
+            st.write(f"TTR (variação de vocabulário): {ai['ttr']:.2f}")
+            st.write(f"CV (variação do tamanho das frases): {ai['cv_sent']:.2f}")
+            st.write(f"Conectores/1k: {ai['conn_per_1k']:.1f}")
+            st.write(f"Vagueza/1k: {ai['vague_per_1k']:.1f}")
+            st.write(f"Repetição/1k: {ai['rep_per_1k']:.1f}")
 
         if ai.get("flagged_sentences"):
-            st.markdown("### Trechos para revisão")
+            st.markdown("### Trechos sugeridos para revisão")
             for i, s in enumerate(ai["flagged_sentences"], start=1):
                 st.write(f"**{i}.** {s}")
 
-        # PDF IA
+        # PDF IA (com interpretação junto no disclaimer)
         if generate_ai_pdf_report is None:
             st.warning("Relatório PDF (IA) indisponível: atualize `veritas_report.py` no deploy.")
         else:
@@ -816,12 +858,15 @@ with tabs[2]:
                 os.getcwd(),
                 f"Relatorio_Veritas_IA_{aires.get('ts', int(time.time()))}.pdf"
             )
+            extra_interp = "\n".join(friendly_lines)
+            disclaimer_ai_pdf = AI_HEURISTIC_NOTE + "\n\nInterpretação (orientativa):\n" + extra_interp
+
             generate_ai_pdf_report(
                 filepath=pdf_path_ai,
                 title="Relatório – Indícios de Uso de IA (análise heurística) – Veritas",
                 query_name=aires.get("query_name", "—"),
                 ai_result=ai,
-                disclaimer=AI_HEURISTIC_NOTE,
+                disclaimer=disclaimer_ai_pdf,
             )
             with open(pdf_path_ai, "rb") as f:
                 st.download_button(
@@ -831,6 +876,31 @@ with tabs[2]:
                     mime="application/pdf",
                     use_container_width=True,
                     key="dl_pdf_ai",
+                )
+
+        # WORD IA (DOCX)
+        if generate_ai_docx_report is None:
+            st.caption("Relatório Word (IA) indisponível: atualize `veritas_report.py` (generate_ai_docx_report).")
+        else:
+            docx_path = os.path.join(
+                os.getcwd(),
+                f"Relatorio_Veritas_IA_{aires.get('ts', int(time.time()))}.docx"
+            )
+            generate_ai_docx_report(
+                filepath=docx_path,
+                title="Relatório – Indícios de Uso de IA (análise heurística) – Veritas",
+                query_name=aires.get("query_name", "—"),
+                ai_result=ai,
+                disclaimer=AI_HEURISTIC_NOTE,
+            )
+            with open(docx_path, "rb") as f:
+                st.download_button(
+                    "⬇️ Baixar relatório (IA – heurístico) em Word",
+                    data=f.read(),
+                    file_name=os.path.basename(docx_path),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key="dl_docx_ai",
                 )
 
 # =========================================================
@@ -888,7 +958,7 @@ with tabs[4]:
         """
 - **Modo Biblioteca (privado):** compara apenas com os documentos que você adicionou.
 - **Modo Internet (externo):** usa SerpAPI para buscar *trechos curtos* e comparar com snippets da web.
-- **Indícios de Uso de IA (heurístico):** calcula padrões linguísticos locais (não é veredito).
+- **Indícios de Uso de IA (heurístico):** mostra indícios de padronização e recomendações (não é veredito).
 - **Importante:** nenhum modo “prova” plágio ou IA; serve como apoio à revisão e integridade acadêmica.
         """
     )
