@@ -15,11 +15,16 @@ from veritas_utils import (
     compute_matches,
     highlight_text,
 )
-from veritas_report import (
-    generate_pdf_report,
-    generate_web_pdf_report,
-    generate_ai_pdf_report,
-)
+
+# --- PDFs (robusto para não quebrar no Cloud) ---
+from veritas_report import generate_pdf_report
+
+try:
+    from veritas_report import generate_web_pdf_report, generate_ai_pdf_report
+except Exception:
+    generate_web_pdf_report = None
+    generate_ai_pdf_report = None
+
 
 # =========================
 # CONFIG GERAL
@@ -60,6 +65,7 @@ PROFILES = {
     "Rigoroso (cópia literal)": {"chunk_words": 80, "stride_words": 35, "threshold": 0.82, "top_k_per_chunk": 1},
     "Sensível (paráfrase próxima)": {"chunk_words": 50, "stride_words": 20, "threshold": 0.66, "top_k_per_chunk": 1},
 }
+
 
 # =========================
 # Leitura de arquivos
@@ -115,7 +121,7 @@ def _inject_css():
 
 
 # =========================
-# INTERNET: SerpAPI (com ranking melhorado)
+# INTERNET: SerpAPI (ranking melhorado)
 # =========================
 def _get_serpapi_key() -> Optional[str]:
     key = None
@@ -224,11 +230,7 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> List[Dict]:
-    """
-    Busca via SerpAPI (Google Search API).
-    Requer 'requests' no requirements.txt.
-    """
-    import requests  # lazy import
+    import requests  # precisa estar no requirements.txt
 
     q = f"\"{chunk}\"" if len(chunk) >= 80 else chunk
     params = {
@@ -292,7 +294,6 @@ def web_similarity_scan(
             w_snip = _snippet_quality(snippet)
 
             score_final = _clamp(sim * w_dom * w_snip, 0.0, 1.0)
-
             raw_hits.append(
                 {"title": title, "link": link, "snippet": snippet, "domain": domain, "score": score_final, "chunk": c}
             )
@@ -470,6 +471,7 @@ with st.sidebar:
         "Perfil",
         list(PROFILES.keys()),
         index=list(PROFILES.keys()).index(st.session_state["profile"]),
+        key="profile_select",
     )
     st.caption(
         f"{st.session_state['profile']} → "
@@ -512,16 +514,32 @@ with tabs[0]:
             query_text = ""
 
             if mode == "Colar texto":
-                query_text = st.text_area("Cole o texto do trabalho/artigo:", height=280, placeholder="Cole seu texto aqui...")
+                query_text = st.text_area(
+                    "Cole o texto do trabalho/artigo:",
+                    height=280,
+                    placeholder="Cole seu texto aqui..."
+                )
             else:
-                up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="upl_biblioteca")
+                up = st.file_uploader(
+                    "Envie um arquivo (.docx, .pdf, .txt)",
+                    type=["docx", "pdf", "txt"],
+                    key="upl_biblioteca",
+                )
                 if up is not None:
                     query_name = up.name
-                    query_text = _read_any(up)
+                    try:
+                        query_text = _read_any(up)
+                    except Exception as e:
+                        st.error(f"Não consegui ler o arquivo. Erro: {e}")
 
             st.divider()
-            run = st.button("🔎 Analisar (biblioteca)", type="primary", use_container_width=True,
-                            disabled=(not query_text or not st.session_state["library"]))
+            run = st.button(
+                "🔎 Analisar (biblioteca)",
+                type="primary",
+                use_container_width=True,
+                disabled=(not query_text or not st.session_state["library"]),
+                key="btn_analisar_bib",
+            )
 
     with col2:
         with st.container(border=True):
@@ -532,27 +550,32 @@ with tabs[0]:
 
     if run:
         profile_params = PROFILES[st.session_state["profile"]]
-        corpus = {n: t for n, t in st.session_state["library"].items()
-                  if not st.session_state["library_meta"].get(n, {}).get("exclude", False)}
-
-        global_sim, matches = compute_matches(
-            query_text=query_text,
-            corpus_docs=corpus,
-            chunk_words=int(profile_params["chunk_words"]),
-            stride_words=int(profile_params["stride_words"]),
-            top_k_per_chunk=int(profile_params["top_k_per_chunk"]),
-            threshold=float(profile_params["threshold"]),
-        )
-
-        st.session_state["last_result"] = {
-            "query_name": query_name,
-            "query_text": query_text,
-            "global_sim": float(global_sim),
-            "matches": matches,
-            "params": {"profile": st.session_state["profile"], **profile_params},
-            "corpus_size": len(corpus),
-            "ts": int(time.time()),
+        corpus = {
+            n: t for n, t in st.session_state["library"].items()
+            if not st.session_state["library_meta"].get(n, {}).get("exclude", False)
         }
+
+        if not corpus:
+            st.error("Sua biblioteca está vazia (ou tudo está excluído). Vá em **Biblioteca** e adicione fontes.")
+        else:
+            global_sim, matches = compute_matches(
+                query_text=query_text,
+                corpus_docs=corpus,
+                chunk_words=int(profile_params["chunk_words"]),
+                stride_words=int(profile_params["stride_words"]),
+                top_k_per_chunk=int(profile_params["top_k_per_chunk"]),
+                threshold=float(profile_params["threshold"]),
+            )
+
+            st.session_state["last_result"] = {
+                "query_name": query_name,
+                "query_text": query_text,
+                "global_sim": float(global_sim),
+                "matches": matches,
+                "params": {"profile": st.session_state["profile"], **profile_params},
+                "corpus_size": len(corpus),
+                "ts": int(time.time()),
+            }
 
     res = st.session_state.get("last_result")
     if res:
@@ -566,17 +589,21 @@ with tabs[0]:
         left, right = st.columns([1, 1], gap="large")
         with left:
             matches = res.get("matches") or []
-            for i, m in enumerate(matches[:20], start=1):
-                st.markdown(f"**{i}.** `{m.source_doc}` — **{m.score*100:.1f}%**")
-                st.write(m.query_chunk)
-                st.write(m.source_chunk)
-                st.divider()
+            if not matches:
+                st.success("Nenhuma correspondência acima do limiar foi encontrada.")
+            else:
+                for i, m in enumerate(matches[:20], start=1):
+                    st.markdown(f"**{i}.** `{m.source_doc}` — **{m.score*100:.1f}%**")
+                    st.caption("Trecho analisado")
+                    st.write(m.query_chunk)
+                    st.caption("Trecho fonte")
+                    st.write(m.source_chunk)
+                    st.divider()
 
         with right:
             highlighted = highlight_text(res["query_text"], res.get("matches") or [])
-            st.text_area("Destaques (⟦ ⟧)", value=highlighted, height=360)
+            st.text_area("Destaques (⟦ ⟧)", value=highlighted, height=330, key="ta_highlight_bib")
 
-            # PDF Biblioteca (já tinha)
             pdf_path = os.path.join(os.getcwd(), f"Relatorio_Veritas_{res.get('ts', int(time.time()))}.pdf")
             generate_pdf_report(
                 filepath=pdf_path,
@@ -588,9 +615,14 @@ with tabs[0]:
                 disclaimer=DISCL + "\n\n" + ETHICAL_NOTE,
             )
             with open(pdf_path, "rb") as f:
-                st.download_button("⬇️ Baixar relatório (Biblioteca) em PDF", data=f.read(),
-                                   file_name=os.path.basename(pdf_path), mime="application/pdf", use_container_width=True,
-                                   key="dl_pdf_bib")
+                st.download_button(
+                    "⬇️ Baixar relatório (Biblioteca) em PDF",
+                    data=f.read(),
+                    file_name=os.path.basename(pdf_path),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_pdf_bib",
+                )
 
 # =========================================================
 # TAB 2: Internet (externo)
@@ -603,8 +635,17 @@ with tabs[1]:
     if not serp_key:
         st.error("Modo Internet indisponível: configure `SERPAPI_KEY` nos secrets.")
     else:
-        consent = st.checkbox("✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.", value=False, key="internet_consent")
-        mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True, key="radio_internet_envio")
+        consent = st.checkbox(
+            "✅ Eu entendo e aceito que trechos do meu texto serão enviados para busca na web.",
+            value=False,
+            key="internet_consent",
+        )
+        mode = st.radio(
+            "Como enviar o texto?",
+            ["Colar texto", "Enviar arquivo"],
+            horizontal=True,
+            key="radio_internet_envio",
+        )
 
         query_name = "Texto colado"
         query_text = ""
@@ -612,10 +653,17 @@ with tabs[1]:
         if mode == "Colar texto":
             query_text = st.text_area("Cole o texto para checar na internet:", height=220, key="internet_text")
         else:
-            up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="internet_uploader")
+            up = st.file_uploader(
+                "Envie um arquivo (.docx, .pdf, .txt)",
+                type=["docx", "pdf", "txt"],
+                key="internet_uploader",
+            )
             if up is not None:
                 query_name = up.name
-                query_text = _read_any(up)
+                try:
+                    query_text = _read_any(up)
+                except Exception as e:
+                    st.error(f"Não consegui ler o arquivo. Erro: {e}")
 
         colA, colB = st.columns(2)
         with colA:
@@ -623,8 +671,13 @@ with tabs[1]:
         with colB:
             num_results = st.slider("Resultados por trecho", 3, 10, 5, 1, key="internet_results")
 
-        run_web = st.button("🔎 Buscar na internet", type="primary", use_container_width=True,
-                            disabled=(not consent or not query_text), key="btn_web")
+        run_web = st.button(
+            "🔎 Buscar na internet",
+            type="primary",
+            use_container_width=True,
+            disabled=(not consent or not query_text),
+            key="btn_web",
+        )
 
         if run_web:
             profile_params = PROFILES[st.session_state["profile"]]
@@ -646,36 +699,52 @@ with tabs[1]:
         webres = st.session_state.get("internet_last")
         if webres:
             hits: List[WebHit] = webres["hits"] or []
-            top = hits[:10]
-            global_web = sum(h.score for h in top) / max(1, len(top))
-            st.metric("Índice web (heurístico)", f"{global_web*100:.1f}%")
+            if not hits:
+                st.warning("Não encontrei resultados relevantes. Tente aumentar trechos/resultados.")
+            else:
+                top = hits[:10]
+                global_web = sum(h.score for h in top) / max(1, len(top))
+                st.metric("Índice web (heurístico)", f"{global_web*100:.1f}%")
 
-            for i, h in enumerate(hits[:20], start=1):
-                st.markdown(f"**{i}. {h.title}** — **{h.score*100:.1f}%**")
-                st.write(h.link)
-                st.write(h.snippet)
-                with st.expander("Chunk enviado"):
-                    st.write(h.chunk)
-                st.divider()
+                for i, h in enumerate(hits[:20], start=1):
+                    st.markdown(f"**{i}. {h.title}** — **{h.score*100:.1f}%**")
+                    if h.link:
+                        st.write(h.link)
+                    if h.snippet:
+                        st.write(h.snippet)
+                    with st.expander("Chunk enviado", expanded=False):
+                        st.write(h.chunk)
+                    st.divider()
 
-            # PDF Internet
-            pdf_path_web = os.path.join(os.getcwd(), f"Relatorio_Veritas_Internet_{webres.get('ts', int(time.time()))}.pdf")
-            generate_web_pdf_report(
-                filepath=pdf_path_web,
-                title="Relatório de Similaridade – Internet (Veritas)",
-                query_name=webres.get("query_name", "—"),
-                profile=webres.get("profile", "—"),
-                global_web_score=global_web,
-                hits=hits,
-                disclaimer=(
-                    "Este relatório é baseado em snippets e resultados públicos retornados por busca. "
-                    "Ele não comprova autoria ou plágio; serve como apoio de revisão e checagem contextual."
-                ),
-            )
-            with open(pdf_path_web, "rb") as f:
-                st.download_button("⬇️ Baixar relatório (Internet) em PDF", data=f.read(),
-                                   file_name=os.path.basename(pdf_path_web), mime="application/pdf",
-                                   use_container_width=True, key="dl_pdf_web")
+                # PDF Internet
+                if generate_web_pdf_report is None:
+                    st.warning("Relatório PDF (Internet) indisponível: atualize `veritas_report.py` no deploy.")
+                else:
+                    pdf_path_web = os.path.join(
+                        os.getcwd(),
+                        f"Relatorio_Veritas_Internet_{webres.get('ts', int(time.time()))}.pdf"
+                    )
+                    generate_web_pdf_report(
+                        filepath=pdf_path_web,
+                        title="Relatório de Similaridade – Internet (Veritas)",
+                        query_name=webres.get("query_name", "—"),
+                        profile=webres.get("profile", "—"),
+                        global_web_score=global_web,
+                        hits=hits,
+                        disclaimer=(
+                            "Este relatório é baseado em snippets e resultados públicos retornados por busca. "
+                            "Ele não comprova autoria ou plágio; serve como apoio de revisão e checagem contextual."
+                        ),
+                    )
+                    with open(pdf_path_web, "rb") as f:
+                        st.download_button(
+                            "⬇️ Baixar relatório (Internet) em PDF",
+                            data=f.read(),
+                            file_name=os.path.basename(pdf_path_web),
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key="dl_pdf_web",
+                        )
 
 # =========================================================
 # TAB 3: Indícios de Uso de IA (análise heurística)
@@ -684,20 +753,37 @@ with tabs[2]:
     st.subheader("Indícios de Uso de IA (análise heurística)")
     st.info(AI_HEURISTIC_NOTE)
 
-    mode = st.radio("Como enviar o texto?", ["Colar texto", "Enviar arquivo"], horizontal=True, key="radio_ai_envio")
+    mode = st.radio(
+        "Como enviar o texto?",
+        ["Colar texto", "Enviar arquivo"],
+        horizontal=True,
+        key="radio_ai_envio",
+    )
     query_name = "Texto colado"
     query_text = ""
 
     if mode == "Colar texto":
         query_text = st.text_area("Cole o texto para análise heurística:", height=240, key="ai_text")
     else:
-        up = st.file_uploader("Envie um arquivo (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="ai_uploader")
+        up = st.file_uploader(
+            "Envie um arquivo (.docx, .pdf, .txt)",
+            type=["docx", "pdf", "txt"],
+            key="ai_uploader",
+        )
         if up is not None:
             query_name = up.name
-            query_text = _read_any(up)
+            try:
+                query_text = _read_any(up)
+            except Exception as e:
+                st.error(f"Não consegui ler o arquivo. Erro: {e}")
 
-    run_ai = st.button("🤖 Rodar análise heurística", type="primary", use_container_width=True,
-                       disabled=(not query_text), key="btn_ai")
+    run_ai = st.button(
+        "🤖 Rodar análise heurística",
+        type="primary",
+        use_container_width=True,
+        disabled=(not query_text),
+        key="btn_ai",
+    )
 
     if run_ai:
         ai = analyze_ai_indicia(query_text)
@@ -707,6 +793,7 @@ with tabs[2]:
     if aires:
         ai = aires["ai"]
         band_title, band_msg = ai["band"]
+
         st.metric("Índice heurístico", f"{ai['score']:.0f}/100")
         st.info(f"**{band_title}** — {band_msg}")
 
@@ -722,24 +809,36 @@ with tabs[2]:
                 st.write(f"**{i}.** {s}")
 
         # PDF IA
-        pdf_path_ai = os.path.join(os.getcwd(), f"Relatorio_Veritas_IA_{aires.get('ts', int(time.time()))}.pdf")
-        generate_ai_pdf_report(
-            filepath=pdf_path_ai,
-            title="Relatório – Indícios de Uso de IA (análise heurística) – Veritas",
-            query_name=aires.get("query_name", "—"),
-            ai_result=ai,
-            disclaimer=AI_HEURISTIC_NOTE,
-        )
-        with open(pdf_path_ai, "rb") as f:
-            st.download_button("⬇️ Baixar relatório (IA – heurístico) em PDF", data=f.read(),
-                               file_name=os.path.basename(pdf_path_ai), mime="application/pdf",
-                               use_container_width=True, key="dl_pdf_ai")
+        if generate_ai_pdf_report is None:
+            st.warning("Relatório PDF (IA) indisponível: atualize `veritas_report.py` no deploy.")
+        else:
+            pdf_path_ai = os.path.join(
+                os.getcwd(),
+                f"Relatorio_Veritas_IA_{aires.get('ts', int(time.time()))}.pdf"
+            )
+            generate_ai_pdf_report(
+                filepath=pdf_path_ai,
+                title="Relatório – Indícios de Uso de IA (análise heurística) – Veritas",
+                query_name=aires.get("query_name", "—"),
+                ai_result=ai,
+                disclaimer=AI_HEURISTIC_NOTE,
+            )
+            with open(pdf_path_ai, "rb") as f:
+                st.download_button(
+                    "⬇️ Baixar relatório (IA – heurístico) em PDF",
+                    data=f.read(),
+                    file_name=os.path.basename(pdf_path_ai),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_pdf_ai",
+                )
 
 # =========================================================
 # TAB 4: Biblioteca (upload)
 # =========================================================
 with tabs[3]:
     st.subheader("Biblioteca Veritas")
+
     up_lib = st.file_uploader(
         "Adicionar documentos (.docx, .pdf, .txt)",
         type=["docx", "pdf", "txt"],
@@ -749,18 +848,29 @@ with tabs[3]:
 
     if up_lib:
         for f in up_lib:
-            st.session_state["library"][f.name] = _read_any(f)
-            st.session_state["library_meta"].setdefault(f.name, {"tags": "", "category": "Referência", "exclude": False})
+            try:
+                st.session_state["library"][f.name] = _read_any(f)
+                st.session_state["library_meta"].setdefault(
+                    f.name, {"tags": "", "category": "Referência", "exclude": False}
+                )
+            except Exception as e:
+                st.error(f"Falha ao ler {f.name}: {e}")
         st.success("Documentos adicionados.")
 
     st.divider()
     if st.session_state["library"]:
         for name in list(st.session_state["library"].keys()):
-            meta = st.session_state["library_meta"].setdefault(name, {"tags": "", "category": "Referência", "exclude": False})
+            meta = st.session_state["library_meta"].setdefault(
+                name, {"tags": "", "category": "Referência", "exclude": False}
+            )
             c1, c2 = st.columns([0.8, 0.2])
             with c1:
                 st.write(f"📄 {name}")
-                meta["exclude"] = st.checkbox("Excluir", value=bool(meta.get("exclude", False)), key=f"exc_{name}")
+                meta["exclude"] = st.checkbox(
+                    "Excluir",
+                    value=bool(meta.get("exclude", False)),
+                    key=f"exc_{name}",
+                )
             with c2:
                 if st.button("Remover", key=f"rm_{name}"):
                     del st.session_state["library"][name]
