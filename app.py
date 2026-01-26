@@ -117,24 +117,24 @@ def web_similarity_scan(text, serpapi_key, profile_params, num_chunks, num_resul
         if h.link not in unique: unique[h.link] = h
     return list(unique.values())[:20]
 
-# --- NOVA FUNÇÃO DE IA DETALHADA ---
+# --- LÓGICA DE IA MELHORADA (COM EXPLICAÇÕES) ---
 def analyze_ai_indicia(text: str) -> Dict:
     text = (text or "").strip()
     words = _split_words(text)
     if not words: return {"score": 0, "band": ("gray", "Indefinido"), "metrics": {"ttr": 0, "conn": 0}, "msg": "Texto insuficiente.", "reasons": []}
     
-    # 1. Riqueza de Vocabulário (TTR)
+    # 1. Riqueza (TTR)
     unique_ratio = len(set(words)) / len(words)
     
-    # 2. Densidade de Conectores
-    ai_conn = ["além disso", "em suma", "portanto", "todavia", "nesse sentido", "por outro lado", "vale ressaltar", "conclui-se", "resumo"]
+    # 2. Conectores
+    ai_conn = ["além disso", "em suma", "portanto", "todavia", "nesse sentido", "por outro lado", "vale ressaltar", "conclui-se"]
     conn_count = sum(text.lower().count(c) for c in ai_conn)
     conn_density = (conn_count / len(words)) * 1000
     
     score = 0
     reasons = []
     
-    # Penalidades explicadas
+    # Penalidades
     if unique_ratio < 0.45: 
         score += 40
         reasons.append("Vocabulário muito repetitivo (típico de IA)")
@@ -144,22 +144,21 @@ def analyze_ai_indicia(text: str) -> Dict:
         
     if conn_density > 12: 
         score += 40
-        reasons.append("Uso excessivo de conectores lógicos (padrão de robô)")
+        reasons.append("Uso excessivo de conectores lógicos (robótico)")
     elif conn_density > 8:
         score += 15
         
     score = min(100, score)
     
-    # Definição da Faixa
     if score < 30: 
-        band = ("green", "Baixa Probabilidade de IA")
-        msg = "O texto apresenta boa variedade vocabular e estrutura natural."
+        band = ("green", "Baixa Probabilidade")
+        msg = "O texto apresenta fluidez e variedade natural."
     elif score < 60: 
         band = ("yellow", "Indícios Moderados")
-        msg = "O texto tem sinais mistos. Pode haver repetição de termos ou estrutura rígida."
+        msg = "Há sinais mistos. Verifique a naturalidade."
     else: 
-        band = ("red", "Alta Probabilidade de IA")
-        msg = "O texto apresenta padrões fortes de geração automática: vocabulário pobre e conectores excessivos."
+        band = ("red", "Alta Probabilidade")
+        msg = "Padrões fortes de geração automática detectados."
 
     return {
         "score": score, 
@@ -173,7 +172,7 @@ def _inject_css():
     st.markdown("""
     <style>
     .header-container { padding: 20px; background: white; border-radius: 10px; margin-bottom: 20px; text-align: center; border: 1px solid #ddd; }
-    .result-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .result-card { background: white; padding: 20px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .disclaimer-box { background: #f8f9fa; padding: 10px; border-radius: 5px; font-size: 0.85rem; color: #666; margin-bottom: 15px; border-left: 3px solid #ccc; }
     </style>
     """, unsafe_allow_html=True)
@@ -213,7 +212,7 @@ with st.sidebar:
     st.divider()
     st.caption("Allminds © 2026")
 
-# --- 1. BIBLIOTECA (VISUAL MELHORADO) ---
+# --- 1. BIBLIOTECA ---
 if selected == "Biblioteca":
     st.subheader("📂 Comparação Local")
     c1, c2 = st.columns([1, 1.2])
@@ -242,28 +241,28 @@ if selected == "Biblioteca":
     with c2:
         res = st.session_state["last_result"]
         if res:
+            # Lógica de explicação melhorada
             score = res['sim']
             if score < 0.03:
-                color, status, expl = "green", "Original", "Nenhuma similaridade relevante."
+                color, status, expl = "green", "Original", "Nenhuma similaridade relevante encontrada."
             elif score < 0.25:
-                color, status, expl = "yellow", "Atenção", "Pequenos trechos similares."
+                color, status, expl = "yellow", "Atenção", "Pequenos trechos similares. Verifique citações."
             else:
-                color, status, expl = "red", "Alerta Alto", "Grande parte do texto já existe na biblioteca."
+                color, status, expl = "red", "Alerta Alto", "Grande parte do texto existe na biblioteca."
 
             st.markdown(f"""
             <div class="result-card" style="border-top: 5px solid {color}; text-align: center;">
                 <h2 style="color: {color}; margin:0;">{score*100:.1f}%</h2>
-                <p style="font-weight: bold; color: #555;">{status}</p>
-                <hr style="margin: 10px 0;">
-                <p style="font-size: 0.9rem; color: #666;">{expl}</p>
+                <strong style="text-transform: uppercase; color: #555;">{status}</strong>
+                <p style="font-size: 0.9rem; color: #666; margin-top:5px;">{expl}</p>
             </div>
             """, unsafe_allow_html=True)
-
+            
             if res["matches"]:
-                st.markdown("#### 🔍 Trechos:")
+                st.markdown("#### 🔍 Trechos Encontrados:")
                 for m in res["matches"][:5]:
                     with st.expander(f"{m.score*100:.0f}% - {m.source_doc}"):
-                        st.markdown(f"**Texto:** ...{m.query_chunk}...")
+                        st.markdown(f"**Trecho:** ...{m.query_chunk}...")
 
 # --- 2. INTERNET ---
 elif selected == "Internet":
@@ -297,4 +296,102 @@ elif selected == "Internet":
             for h in w_res["hits"]:
                 st.markdown(f"""<div class="result-card"><a href="{h.link}" target="_blank"><b>{h.title}</b></a><br><span style="color:red">{h.score*100:.0f}%</span> - {h.snippet}</div>""", unsafe_allow_html=True)
         elif w_res:
-            st.success("
+            st.success("Nada encontrado.")
+
+# --- 3. IA (RESULTADOS MELHORADOS) ---
+elif selected == "IA":
+    st.subheader("🤖 Detector IA")
+    st.markdown(f"<div class='disclaimer-box'>{AI_HEURISTIC_NOTE}</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1.2])
+    with c1:
+        tab_ai_p, tab_ai_u = st.tabs(["📝 Colar", "📁 Upload"])
+        ai_text = ""
+        ai_name = "Texto IA"
+        with tab_ai_p:
+            t = st.text_area("Texto IA:", height=200, key="ai_in_paste")
+            if t: ai_text = t
+        with tab_ai_u:
+            f = st.file_uploader("Arquivo (IA)", type=["docx", "pdf", "txt"], key="ai_in_up")
+            if f:
+                ai_text = _read_any(f)
+                ai_name = f.name
+                st.success(f"Lido: {f.name}")
+
+        if st.button("Verificar IA", type="primary", disabled=not ai_text):
+            res = analyze_ai_indicia(ai_text)
+            st.session_state["ai_last"] = {"res": res, "name": ai_name}
+
+    with c2:
+        ai_data = st.session_state["ai_last"]
+        if ai_data:
+            r = ai_data["res"]
+            color = r['band'][0]
+            
+            # Card Principal
+            st.markdown(f"""
+            <div class="result-card" style="border-left: 5px solid {color}; padding: 20px;">
+                <h3 style="color:{color}; margin:0;">{r['band'][1]}</h3>
+                <h1 style="margin:0; font-size: 3rem;">{r['score']}%</h1>
+                <p style="font-size: 1.1rem; margin-top: 10px;">{r['msg']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Detalhes e Métricas
+            st.divider()
+            if r['reasons']:
+                st.markdown("#### 🔬 Principais Indícios:")
+                for motivo in r['reasons']:
+                    st.warning(f"⚠️ {motivo}")
+            else:
+                st.success("✅ Estrutura natural e humana.")
+            
+            st.caption("Métricas Técnicas:")
+            cm1, cm2 = st.columns(2)
+            cm1.metric("Variedade (TTR)", f"{r['metrics']['ttr']*100:.1f}%")
+            cm2.metric("Conectores", f"{r['metrics']['conn']:.1f}")
+
+# --- 4. RELATÓRIOS ---
+elif selected == "Relatórios":
+    st.subheader("📊 Downloads")
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("**Biblioteca**")
+        r = st.session_state["last_result"]
+        if r and generate_pdf_report:
+            if st.button("PDF (Local)"):
+                generate_pdf_report("Relatorio_Local.pdf", "Veritas Local", r["name"], r["sim"], r["matches"], {}, DISCL)
+                with open("Relatorio_Local.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_Local.pdf")
+    
+    with c2:
+        st.markdown("**Internet**")
+        w = st.session_state["internet_last"]
+        if w and w["hits"] and generate_web_pdf_report:
+            if st.button("PDF (Web)"):
+                generate_web_pdf_report("Relatorio_Web.pdf", "Veritas Web", "Busca Web", "Padrão", 0.0, w["hits"], DISCL)
+                with open("Relatorio_Web.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_Web.pdf")
+
+    with c3:
+        st.markdown("**IA**")
+        a = st.session_state["ai_last"]
+        if a and generate_ai_pdf_report:
+            if st.button("PDF (IA)"):
+                # Variáveis encurtadas para evitar erro de string longa
+                generate_ai_pdf_report("Relatorio_IA.pdf", "Veritas IA", a["name"], a["res"], AI_HEURISTIC_NOTE)
+                with open("Relatorio_IA.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_IA.pdf")
+
+# --- 5. GERENCIAR ---
+elif selected == "Gerenciar":
+    st.subheader("📚 Gerenciar Biblioteca")
+    ups = st.file_uploader("Adicionar arquivos", accept_multiple_files=True)
+    if ups:
+        for u in ups: st.session_state["library"][u.name] = _read_any(u)
+        st.success("Adicionados!")
+    
+    if st.session_state["library"]:
+        for k in list(st.session_state["library"].keys()):
+            c1, c2 = st.columns([4,1])
+            c1.text(k)
+            if c2.button("🗑️", key=f"del_{k}"):
+                del st.session_state["library"][k]
+                st.rerun()
