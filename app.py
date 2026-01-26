@@ -339,7 +339,7 @@ st.markdown(f"""
 <div class="toolbar">
     <div class="toolbar-title">🔍 {APP_TITLE}</div>
     <div style="display:flex;">
-        <div class="toolbar-btn"><span class="toolbar-btn-icon">🧪</span><span class="toolbar-btn-text">Biblioteca</span></div>
+        <div class="toolbar-btn"><span class="toolbar-btn-icon">📂</span><span class="toolbar-btn-text">Biblioteca</span></div>
         <div class="toolbar-btn"><span class="toolbar-btn-icon">🌐</span><span class="toolbar-btn-text">Internet</span></div>
         <div class="toolbar-btn"><span class="toolbar-btn-icon">🤖</span><span class="toolbar-btn-text">IA</span></div>
         <div class="toolbar-btn"><span class="toolbar-btn-icon">📊</span><span class="toolbar-btn-text">Relatórios</span></div>
@@ -368,7 +368,7 @@ with st.sidebar:
     st.info("Desenvolvido por **Allminds**")
 
 # Tabs Principais
-main_tabs = st.tabs(["🧪 Biblioteca (Local)", "🌐 Internet (Web)", "🤖 Detector de IA", "📊 Relatórios", "📚 Gerenciar Biblioteca"])
+main_tabs = st.tabs(["📂 Biblioteca (Local)", "🌐 Internet (Web)", "🤖 Detector de IA", "📊 Relatórios", "📚 Gerenciar Biblioteca"])
 
 # --- TAB 1: BIBLIOTECA (LOCAL) ---
 with main_tabs[0]:
@@ -584,7 +584,7 @@ with main_tabs[3]:
 
         # Relatório Biblioteca
         with col_rep1:
-            st.markdown("#### 🧪 Biblioteca (Local)")
+            st.markdown("#### 📂 Biblioteca (Local)")
             res_lib = st.session_state.get("last_result")
             if res_lib and generate_pdf_report:
                 st.success(f"Análise disponível: {res_lib['name']}")
