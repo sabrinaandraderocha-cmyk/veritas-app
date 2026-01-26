@@ -5,12 +5,11 @@ import difflib
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 import streamlit as st
-from streamlit_option_menu import option_menu  # A MELHORIA: Biblioteca de menu
+from streamlit_option_menu import option_menu
 
 # =========================
 # IMPORTAÇÕES DE MÓDULOS EXTERNOS
 # =========================
-# Tenta importar os módulos auxiliares (certifique-se de que veritas_utils.py existe na pasta)
 try:
     from veritas_utils import (
         extract_text_from_txt_bytes,
@@ -20,14 +19,13 @@ try:
         highlight_text,
     )
 except ImportError:
-    # Fallbacks simples caso o arquivo não exista, para o app não quebrar
+    # Funções de segurança caso o arquivo utils falhe
     def extract_text_from_txt_bytes(b): return b.decode("utf-8", errors="ignore")
     def extract_text_from_docx_bytes(b): return "Erro: veritas_utils não encontrado."
     def extract_text_from_pdf_bytes(b): return "Erro: veritas_utils não encontrado."
     def compute_matches(*args): return 0.0, []
     def highlight_text(t, m): return t
 
-# Tenta importar módulos de relatório
 try:
     from veritas_report import generate_pdf_report, generate_web_pdf_report, generate_ai_pdf_report, generate_ai_docx_report
 except ImportError:
@@ -78,45 +76,24 @@ def _inject_css():
     st.markdown(
         """
         <style>
-        /* Fonte e Cores Gerais */
         .main { background-color: #f8fafc; font-family: 'Segoe UI', sans-serif; }
-        
-        /* Cabeçalho Personalizado */
         .header-container {
-            padding: 20px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-            text-align: center;
+            padding: 20px; background: white; border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; text-align: center;
         }
         .header-title { color: #1e40af; font-size: 2.5rem; font-weight: 700; margin: 0; }
         .header-subtitle { color: #64748b; font-size: 1.1rem; margin-top: 5px; }
-
-        /* Cards de Resultado */
         .result-card {
-            background-color: white;
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-            margin-bottom: 15px;
+            background-color: white; padding: 20px; border-radius: 12px;
+            border: 1px solid #e2e8f0; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05); margin-bottom: 15px;
         }
-        
-        /* Pills e Badges */
-        .pill {
-            display: inline-block; padding: 4px 12px; border-radius: 99px;
-            font-size: 0.85rem; font-weight: 600; margin-right: 8px;
-        }
+        .pill { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 0.85rem; font-weight: 600; margin-right: 8px; }
         .pill-green { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .pill-yellow { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; }
         .pill-red { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
-
-        /* Avisos */
         .disclaimer-box {
             font-size: 0.85rem; color: #64748b; background: #f1f5f9;
-            padding: 12px; border-radius: 8px; border-left: 4px solid #cbd5e1;
-            margin-bottom: 20px;
+            padding: 12px; border-radius: 8px; border-left: 4px solid #cbd5e1; margin-bottom: 20px;
         }
         </style>
         """,
@@ -145,7 +122,7 @@ def _get_band_color(score: float):
     return "red", "Alta Similaridade", "Revisão obrigatória necessária."
 
 # =========================
-# LÓGICA INTERNET (SERPAPI)
+# LÓGICA INTERNET
 # =========================
 def _get_serpapi_key() -> Optional[str]:
     return st.secrets.get("SERPAPI_KEY") or os.getenv("SERPAPI_KEY")
@@ -179,10 +156,7 @@ class WebHit:
 def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> List[Dict]:
     import requests
     q = f'"{chunk}"' if len(chunk) >= 80 else chunk
-    params = {
-        "engine": "google", "q": q, "api_key": serpapi_key,
-        "num": num_results, "hl": "pt", "gl": "br",
-    }
+    params = {"engine": "google", "q": q, "api_key": serpapi_key, "num": num_results, "hl": "pt", "gl": "br"}
     try:
         r = requests.get("https://serpapi.com/search.json", params=params, timeout=20)
         r.raise_for_status()
@@ -194,71 +168,54 @@ def serpapi_search_chunk(chunk: str, serpapi_key: str, num_results: int = 5) -> 
 def web_similarity_scan(text, serpapi_key, profile_params, num_chunks, num_results):
     chunks = build_chunks(text, int(profile_params["chunk_words"]), int(profile_params["stride_words"]), num_chunks)
     raw_hits = []
-    
     progress_bar = st.progress(0)
     for i, c in enumerate(chunks):
         results = serpapi_search_chunk(c, serpapi_key, num_results)
         for it in results:
-            title = it.get("title", "")
-            link = it.get("link", "")
-            snippet = it.get("snippet", "")
-            sim = seq_similarity(c, snippet)
+            sim = seq_similarity(c, it.get("snippet", ""))
             if sim > 0.1:
-                raw_hits.append(WebHit(title, link, snippet, sim, c))
+                raw_hits.append(WebHit(it.get("title", ""), it.get("link", ""), it.get("snippet", ""), sim, c))
         progress_bar.progress((i + 1) / len(chunks))
     progress_bar.empty()
-
-    raw_hits.sort(key=lambda x: x.score, reverse=True)
-    unique_hits = {}
-    for h in raw_hits:
-        if h.link not in unique_hits:
-            unique_hits[h.link] = h
     
+    unique_hits = {}
+    for h in sorted(raw_hits, key=lambda x: x.score, reverse=True):
+        if h.link not in unique_hits: unique_hits[h.link] = h
     return list(unique_hits.values())[:20]
 
 # =========================
-# LÓGICA IA (HEURÍSTICA)
+# LÓGICA IA
 # =========================
 def analyze_ai_indicia(text: str) -> Dict:
     text = (text or "").strip()
     words = _split_words(text)
     if not words: return {"score": 0, "band": ("gray", "Indefinido"), "details": {}}
-
+    
     unique_ratio = len(set(words)) / len(words)
-    ai_connectors = ["além disso", "em suma", "portanto", "todavia", "nesse sentido", "por outro lado", "vale ressaltar"]
-    conn_count = sum(text.lower().count(c) for c in ai_connectors)
+    ai_conn = ["além disso", "em suma", "portanto", "todavia", "nesse sentido", "por outro lado", "vale ressaltar"]
+    conn_count = sum(text.lower().count(c) for c in ai_conn)
     conn_density = (conn_count / len(words)) * 1000
-
+    
     score = 0
     if unique_ratio < 0.4: score += 30
     if conn_density > 8: score += 30
-    
     score = min(100, score)
-    if score < 30: band = ("green", "Baixo Indício")
-    elif score < 60: band = ("yellow", "Indício Moderado")
-    else: band = ("red", "Indício Elevado")
-
-    return {
-        "score": score, "band": band,
-        "metrics": {"ttr": unique_ratio, "conn": conn_density}
-    }
+    
+    band = ("green", "Baixo Indício") if score < 30 else ("yellow", "Indício Moderado") if score < 60 else ("red", "Indício Elevado")
+    return {"score": score, "band": band, "metrics": {"ttr": unique_ratio, "conn": conn_density}}
 
 # =========================
-# INICIALIZAÇÃO DE ESTADO
+# INICIALIZAÇÃO
 # =========================
 def _init_state():
-    defaults = {"library": {}, "last_result": None, "profile": "Padrão (Equilibrado)", "internet_last": None, "ai_last": None}
-    for k, v in defaults.items():
+    for k, v in {"library": {}, "last_result": None, "profile": "Padrão (Equilibrado)", "internet_last": None, "ai_last": None}.items():
         if k not in st.session_state: st.session_state[k] = v
 
-# =========================
-# INTERFACE PRINCIPAL
-# =========================
 st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🔍")
 _init_state()
 _inject_css()
 
-# --- HEADER E NAVEGAÇÃO (AQUI ESTÁ A CORREÇÃO) ---
+# --- HEADER E NAVEGAÇÃO ---
 st.markdown(f"""
 <div class="header-container">
     <div class="header-title">🔍 {APP_TITLE}</div>
@@ -266,14 +223,11 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Menu Horizontal Reativo
 selected = option_menu(
     menu_title=None,
     options=["Biblioteca", "Internet", "IA", "Relatórios", "Gerenciar"],
     icons=["folder-symlink", "globe", "robot", "file-earmark-pdf", "gear"],
-    menu_icon="cast",
-    default_index=0,
-    orientation="horizontal",
+    menu_icon="cast", default_index=0, orientation="horizontal",
     styles={
         "container": {"padding": "0!important", "background-color": "#ffffff"},
         "icon": {"color": "#1e40af", "font-size": "16px"},
@@ -282,34 +236,27 @@ selected = option_menu(
     }
 )
 
-# Barra Lateral (Configurações)
+# Barra Lateral
 with st.sidebar:
     st.header("⚙️ Configurações")
     st.session_state["profile"] = st.selectbox("Perfil de Análise", list(PROFILES.keys()))
     params = PROFILES[st.session_state["profile"]]
     st.caption(f"Blocos de {params['chunk_words']} palavras | Precisão: {int(params['threshold']*100)}%")
-    
     st.divider()
-    st.markdown("### Status da API")
-    if _get_serpapi_key():
-        st.success("✅ SerpAPI Conectada")
-    else:
-        st.warning("⚠️ SerpAPI Off (Configure nos Secrets)")
-    
+    if _get_serpapi_key(): st.success("✅ SerpAPI Conectada")
+    else: st.warning("⚠️ SerpAPI Off (Configure nos Secrets)")
     st.divider()
     st.info("Allminds © 2026")
 
-# --- CONTEÚDO BASEADO NO MENU SELECIONADO ---
+# --- CONTEÚDO PRINCIPAL ---
 
-# 1. BIBLIOTECA LOCAL
+# 1. BIBLIOTECA
 if selected == "Biblioteca":
     st.subheader("📂 Comparação com Biblioteca Local")
     col_input, col_res = st.columns([1, 1.2], gap="large")
-    
     with col_input:
         st.markdown("### 1. Texto para Análise")
         tab_paste, tab_upload = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
-        
         query_text = ""
         query_name = "Texto Inserido"
         
@@ -317,19 +264,18 @@ if selected == "Biblioteca":
             text_paste = st.text_area("Cole aqui:", height=250)
             if text_paste: query_text = text_paste
         with tab_upload:
-            file_upload = st.file_uploader("Word, PDF ou TXT", type=["docx", "pdf", "txt"])
+            file_upload = st.file_uploader("Word, PDF ou TXT", type=["docx", "pdf", "txt"], key="lib_up")
             if file_upload:
                 query_text = _read_any(file_upload)
                 query_name = file_upload.name
-
+        
         btn_analyze = st.button("🔍 Comparar", type="primary", use_container_width=True, disabled=not query_text)
 
     with col_res:
         st.markdown("### 2. Resultado")
         if btn_analyze:
             corpus = st.session_state["library"]
-            if not corpus:
-                st.error("Biblioteca vazia! Vá em 'Gerenciar' para adicionar arquivos.")
+            if not corpus: st.error("Biblioteca vazia! Vá em 'Gerenciar' para adicionar arquivos.")
             else:
                 p = PROFILES[st.session_state["profile"]]
                 with st.spinner("Processando..."):
@@ -339,35 +285,38 @@ if selected == "Biblioteca":
         res = st.session_state["last_result"]
         if res:
             color, label, desc = _get_band_color(res["sim"])
-            st.markdown(f"""
-            <div class="result-card" style="border-left: 5px solid {color};">
-                <h2 style="color:{color}; margin:0;">{res['sim']*100:.1f}%</h2>
-                <span class="pill pill-{color}">{label}</span>
-                <p style="color:#64748b;">{desc}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
+            st.markdown(f"""<div class="result-card" style="border-left: 5px solid {color};"><h2 style="color:{color}; margin:0;">{res['sim']*100:.1f}%</h2><span class="pill pill-{color}">{label}</span><p style="color:#64748b;">{desc}</p></div>""", unsafe_allow_html=True)
             with st.expander("Ver Detalhes dos Matches"):
                 for m in res["matches"][:10]:
                     st.markdown(f"**Fonte:** {m.source_doc} | **Sim:** {m.score*100:.0f}%")
                     st.code(m.query_chunk)
-        else:
-            st.info("Aguardando análise.")
+        else: st.info("Aguardando análise.")
 
 # 2. INTERNET
 elif selected == "Internet":
     st.subheader("🌐 Busca na Web")
     st.markdown(f"<div class='disclaimer-box'>{INTERNET_PRIVACY_NOTE}</div>", unsafe_allow_html=True)
-    
     col_web_in, col_web_out = st.columns([1, 1.2], gap="large")
+    
     with col_web_in:
-        web_text = st.text_area("Texto para busca na web:", height=200)
+        st.markdown("### Entrada de Dados")
+        tab_paste_web, tab_upload_web = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
+        web_text = ""
+        with tab_paste_web:
+            web_text_paste = st.text_area("Cole o texto para busca:", height=200, key="web_paste")
+            if web_text_paste: web_text = web_text_paste
+        with tab_upload_web:
+            web_file_upload = st.file_uploader("Word, PDF ou TXT", type=["docx", "pdf", "txt"], key="web_upload")
+            if web_file_upload:
+                web_text = _read_any(web_file_upload)
+                st.success(f"Arquivo lido: {web_file_upload.name}")
+
         btn_web = st.button("Buscar na Internet", type="primary", use_container_width=True, disabled=not web_text)
     
     with col_web_out:
+        st.markdown("### Resultados")
         if btn_web:
-            if not _get_serpapi_key():
-                st.error("Chave SerpAPI não configurada.")
+            if not _get_serpapi_key(): st.error("Chave SerpAPI não configurada.")
             else:
                 p = PROFILES[st.session_state["profile"]]
                 with st.spinner("Varrendo a internet..."):
@@ -377,71 +326,64 @@ elif selected == "Internet":
         web_res = st.session_state.get("internet_last")
         if web_res and web_res.get("hits"):
             for h in web_res["hits"]:
-                st.markdown(f"**[{h.title}]({h.link})** - `{h.score*100:.0f}%`")
-                st.caption(h.snippet)
-                st.divider()
-        elif web_res:
-            st.success("Nada relevante encontrado.")
+                st.markdown(f"""<div class="result-card" style="padding:15px; margin-bottom:10px;"><a href="{h.link}" target="_blank" style="font-weight:bold; font-size:1.1rem;">{h.title}</a><div style="color:red; font-weight:bold;">Similaridade: {h.score*100:.0f}%</div><div style="font-size:0.9rem; color:#555;">{h.snippet}</div></div>""", unsafe_allow_html=True)
+        elif web_res: st.success("Nenhuma similaridade relevante encontrada na web.")
 
 # 3. IA
 elif selected == "IA":
     st.subheader("🤖 Detector de Padrões de IA")
     st.markdown(f"<div class='disclaimer-box'>{AI_HEURISTIC_NOTE}</div>", unsafe_allow_html=True)
     
-    ai_text = st.text_area("Texto para análise:", height=250)
-    if st.button("Verificar Padrões", type="primary"):
-        res = analyze_ai_indicia(ai_text)
-        st.session_state["ai_last"] = {"res": res, "name": "Texto IA"}
-    
-    ai_data = st.session_state.get("ai_last")
-    if ai_data:
-        res = ai_data["res"]
-        color, label = res["band"]
-        st.markdown(f"""
-        <div class="result-card" style="border: 2px solid {color}; text-align:center;">
-            <h3 style="color:{color}">{label} (Score: {res['score']})</h3>
-            <p>Repetição Vocabular: {1.0 - res['metrics']['ttr']:.2f} | Conectores: {res['metrics']['conn']:.1f}</p>
-        </div>
-        """, unsafe_allow_html=True)
+    col_ai_in, col_ai_out = st.columns([1, 1.2], gap="large")
+    with col_ai_in:
+        tab_paste_ai, tab_upload_ai = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
+        ai_text = ""
+        ai_name = "Texto IA"
+        with tab_paste_ai:
+            ai_paste = st.text_area("Cole o texto:", height=250, key="ai_paste")
+            if ai_paste: ai_text = ai_paste
+        with tab_upload_ai:
+            ai_up = st.file_uploader("Upload Arquivo", type=["docx", "pdf", "txt"], key="ai_up")
+            if ai_up: 
+                ai_text = _read_any(ai_up)
+                ai_name = ai_up.name
+        
+        if st.button("Verificar Padrões", type="primary", disabled=not ai_text):
+            res = analyze_ai_indicia(ai_text)
+            st.session_state["ai_last"] = {"res": res, "name": ai_name}
+            
+    with col_ai_out:
+        ai_data = st.session_state.get("ai_last")
+        if ai_data:
+            res = ai_data["res"]
+            color, label = res["band"]
+            st.markdown(f"""<div class="result-card" style="border: 2px solid {color}; text-align:center;"><h3 style="color:{color}">{label} (Score: {res['score']})</h3><p>Repetição Vocabular: {1.0 - res['metrics']['ttr']:.2f} | Conectores: {res['metrics']['conn']:.1f}</p></div>""", unsafe_allow_html=True)
 
 # 4. RELATÓRIOS
 elif selected == "Relatórios":
     st.subheader("📊 Central de Downloads")
     c1, c2, c3 = st.columns(3)
-    
     with c1:
         st.markdown("**Biblioteca**")
         res_lib = st.session_state.get("last_result")
         if res_lib and generate_pdf_report:
             if st.button("Gerar PDF (Local)"):
                 generate_pdf_report("Relatorio_Local.pdf", "Veritas Local", res_lib["name"], res_lib["sim"], res_lib["matches"], {}, DISCL)
-                with open("Relatorio_Local.pdf", "rb") as f:
-                    st.download_button("📥 Baixar PDF", f, "Relatorio_Local.pdf")
-        else:
-            st.caption("Sem dados.")
-
+                with open("Relatorio_Local.pdf", "rb") as f: st.download_button("📥 Baixar PDF", f, "Relatorio_Local.pdf")
+        else: st.caption("Sem dados recentes.")
+    
     with c2:
         st.markdown("**Internet**")
-        st.caption("Disponível após busca web.")
+        res_web = st.session_state.get("internet_last")
+        if res_web and res_web.get("hits") and generate_web_pdf_report:
+            if st.button("Gerar PDF (Web)"):
+                generate_web_pdf_report("Relatorio_Web.pdf", "Veritas Web", res_web["name"], "Padrão", 0.0, res_web["hits"], DISCL)
+                with open("Relatorio_Web.pdf", "rb") as f: st.download_button("📥 Baixar PDF", f, "Relatorio_Web.pdf")
+        else: st.caption("Sem dados recentes.")
 
     with c3:
         st.markdown("**IA**")
-        st.caption("Disponível após análise IA.")
-
-# 5. GERENCIAR
-elif selected == "Gerenciar":
-    st.subheader("📚 Gerenciar Banco de Dados")
-    up_lib = st.file_uploader("Adicionar arquivos", type=["docx", "pdf", "txt"], accept_multiple_files=True)
-    if up_lib:
-        for f in up_lib:
-            st.session_state["library"][f.name] = _read_any(f)
-        st.success("Arquivos adicionados!")
-    
-    st.divider()
-    if st.session_state["library"]:
-        for name in list(st.session_state["library"].keys()):
-            c1, c2 = st.columns([4, 1])
-            c1.text(f"📄 {name}")
-            if c2.button("🗑️", key=f"del_{name}"):
-                del st.session_state["library"][name]
-                st.rerun()
+        res_ai = st.session_state.get("ai_last")
+        if res_ai and generate_ai_pdf_report:
+             if st.button("Gerar PDF (IA)"):
+                generate_ai_pdf_report("Relatorio
