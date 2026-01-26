@@ -67,16 +67,72 @@ PROFILES = {
 }
 
 # =========================
-# ESTILO CSS (VISUAL PREMIUM)
+# ESTILO CSS (VISUAL TIPO COPYSPIDER)
 # =========================
 def _inject_css():
     st.markdown(
         """
         <style>
         /* Fonte e Cores Gerais */
-        .main { background-color: #f8fafc; }
-        h1 { color: #1e293b; font-weight: 800; letter-spacing: -1px; }
+        .main { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        h1 { color: #1e40af; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 0; }
         h2, h3 { color: #334155; }
+        
+        /* Barra de Ferramentas Superior */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            padding: 10px 20px;
+            background: #ffffff;
+            border-bottom: 2px solid #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .toolbar-title {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #1e40af;
+            margin-right: 20px;
+        }
+        .toolbar-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 8px 15px;
+            margin-right: 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f8fafc;
+            color: #475569;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .toolbar-btn:hover {
+            background: #eef2ff;
+            border-color: #1e40af;
+            color: #1e40af;
+        }
+        .toolbar-btn-icon { font-size: 1.5rem; }
+        .toolbar-btn-text { font-size: 0.8rem; font-weight: 600; }
+
+        /* Área de Conteúdo */
+        .content-panel {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        
+        /* Botões e Inputs */
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .stTextInput > div > div > input, .stTextArea > div > div > textarea {
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+        }
         
         /* Cards de Resultado */
         .result-card {
@@ -86,7 +142,9 @@ def _inject_css():
             border: 1px solid #e2e8f0;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
             margin-bottom: 15px;
+            transition: transform 0.2s;
         }
+        .result-card:hover { transform: translateY(-2px); }
         
         /* Pills e Badges */
         .pill {
@@ -103,16 +161,16 @@ def _inject_css():
         .pill-gray { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
 
         /* Métricas */
-        div[data-testid="stMetricValue"] { font-size: 2rem !important; color: #0f172a; }
+        div[data-testid="stMetricValue"] { font-size: 2.2rem !important; color: #0f172a; font-weight: 700; }
         
         /* Avisos */
         .disclaimer-box {
             font-size: 0.85rem;
             color: #64748b;
             background: #f8fafc;
-            padding: 10px;
+            padding: 12px;
             border-radius: 8px;
-            border-left: 3px solid #cbd5e1;
+            border-left: 4px solid #cbd5e1;
             margin-bottom: 20px;
         }
         </style>
@@ -272,16 +330,28 @@ def _init_state():
 # =========================
 # INTERFACE PRINCIPAL
 # =========================
-st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="⚖️")
+st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🔍")
 _init_state()
 _inject_css()
 
-# Cabeçalho
-st.markdown(f"<h1>⚖️ {APP_TITLE} <span style='font-size:0.5em; color:#64748b; font-weight:400;'>| {APP_SUBTITLE}</span></h1>", unsafe_allow_html=True)
+# Barra Superior (Estilo CopySpider)
+st.markdown(f"""
+<div class="toolbar">
+    <div class="toolbar-title">🔍 {APP_TITLE}</div>
+    <div style="display:flex;">
+        <div class="toolbar-btn"><span class="toolbar-btn-icon">🧪</span><span class="toolbar-btn-text">Biblioteca</span></div>
+        <div class="toolbar-btn"><span class="toolbar-btn-icon">🌐</span><span class="toolbar-btn-text">Internet</span></div>
+        <div class="toolbar-btn"><span class="toolbar-btn-icon">🤖</span><span class="toolbar-btn-text">IA</span></div>
+        <div class="toolbar-btn"><span class="toolbar-btn-icon">📊</span><span class="toolbar-btn-text">Relatórios</span></div>
+    </div>
+    <div style="flex-grow:1; text-align:right; font-size:0.9rem; color:#64748b;">{APP_SUBTITLE}</div>
+</div>
+""", unsafe_allow_html=True)
+
 
 # Barra Lateral
 with st.sidebar:
-    st.header("Configurações")
+    st.header("⚙️ Configurações")
     st.session_state["profile"] = st.selectbox("Perfil de Análise", list(PROFILES.keys()))
     
     params = PROFILES[st.session_state["profile"]]
@@ -298,184 +368,303 @@ with st.sidebar:
     st.info("Desenvolvido por **Allminds**")
 
 # Tabs Principais
-tabs = st.tabs(["🧪 Biblioteca (Local)", "🌐 Internet (Web)", "🤖 Detector de IA", "📚 Gerenciar Biblioteca"])
+main_tabs = st.tabs(["🧪 Biblioteca (Local)", "🌐 Internet (Web)", "🤖 Detector de IA", "📊 Relatórios", "📚 Gerenciar Biblioteca"])
 
 # --- TAB 1: BIBLIOTECA (LOCAL) ---
-with tabs[0]:
-    col_input, col_res = st.columns([1, 1.2], gap="large")
-    
-    with col_input:
-        st.markdown("### 1. Texto para Análise")
-        tab_paste, tab_upload = st.tabs(["Colar Texto", "Upload Arquivo"])
+with main_tabs[0]:
+    with st.container(border=False):
+        st.markdown('<div class="content-panel">', unsafe_allow_html=True)
+        col_input, col_res = st.columns([1, 1.2], gap="large")
         
-        with tab_paste:
-            text_paste = st.text_area("Cole o conteúdo aqui:", height=250)
-        with tab_upload:
-            file_upload = st.file_uploader("Word, PDF ou TXT", type=["docx", "pdf", "txt"])
-        
-        query_text = ""
-        query_name = "Texto Inserido"
-        
-        if text_paste:
-            query_text = text_paste
-        elif file_upload:
-            query_text = _read_any(file_upload)
-            query_name = file_upload.name
-
-        btn_analyze = st.button("🔍 Comparar com Biblioteca", type="primary", use_container_width=True, disabled=not query_text)
-
-    with col_res:
-        st.markdown("### 2. Resultado")
-        
-        if btn_analyze:
-            corpus = st.session_state["library"]
-            if not corpus:
-                st.error("Sua biblioteca está vazia! Adicione arquivos na aba 'Gerenciar Biblioteca'.")
-            else:
-                p = PROFILES[st.session_state["profile"]]
-                with st.spinner("Processando similaridade..."):
-                    sim, matches = compute_matches(query_text, corpus, p["chunk_words"], p["stride_words"], p["top_k_per_chunk"], p["threshold"])
-                    
-                    st.session_state["last_result"] = {
-                        "sim": sim, "matches": matches, "name": query_name, "text": query_text
-                    }
-
-        # Exibir Resultados Armazenados
-        res = st.session_state["last_result"]
-        if res:
-            color, label, desc = _get_band_color(res["sim"])
+        with col_input:
+            st.markdown("### 1. Texto para Análise")
+            tab_paste, tab_upload = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
             
-            # Card de Placar
-            st.markdown(f"""
-            <div class="result-card" style="border-left: 5px solid {color};">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <h2 style="margin:0; color:{color};">{res['sim']*100:.1f}%</h2>
-                        <span style="font-weight:bold; color:#334155;">Índice Global de Similaridade</span>
-                    </div>
-                    <div style="text-align:right;">
-                        <span class="pill pill-{color}">{label}</span>
-                        <p style="font-size:0.8rem; margin-top:5px; color:#64748b;">{desc}</p>
+            with tab_paste:
+                text_paste = st.text_area("Cole o conteúdo aqui:", height=250, placeholder="Cole o texto do trabalho, artigo ou documento...")
+            with tab_upload:
+                file_upload = st.file_uploader("Word, PDF ou TXT", type=["docx", "pdf", "txt"], help="Arraste e solte seu arquivo aqui")
+            
+            query_text = ""
+            query_name = "Texto Inserido"
+            
+            if text_paste:
+                query_text = text_paste
+            elif file_upload:
+                query_text = _read_any(file_upload)
+                query_name = file_upload.name
+
+            btn_analyze = st.button("🔍 Comparar com Biblioteca", type="primary", use_container_width=True, disabled=not query_text)
+
+        with col_res:
+            st.markdown("### 2. Resultado")
+            
+            if btn_analyze:
+                corpus = st.session_state["library"]
+                if not corpus:
+                    st.error("Sua biblioteca está vazia! Adicione arquivos na aba 'Gerenciar Biblioteca'.")
+                else:
+                    p = PROFILES[st.session_state["profile"]]
+                    with st.spinner("Processando similaridade..."):
+                        sim, matches = compute_matches(query_text, corpus, p["chunk_words"], p["stride_words"], p["top_k_per_chunk"], p["threshold"])
+                        
+                        st.session_state["last_result"] = {
+                            "sim": sim, "matches": matches, "name": query_name, "text": query_text
+                        }
+
+            # Exibir Resultados Armazenados
+            res = st.session_state["last_result"]
+            if res:
+                color, label, desc = _get_band_color(res["sim"])
+                
+                # Card de Placar
+                st.markdown(f"""
+                <div class="result-card" style="border-left: 5px solid {color};">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h2 style="margin:0; color:{color};">{res['sim']*100:.1f}%</h2>
+                            <span style="font-weight:bold; color:#334155;">Índice Global de Similaridade</span>
+                        </div>
+                        <div style="text-align:right;">
+                            <span class="pill pill-{color}">{label}</span>
+                            <p style="font-size:0.8rem; margin-top:5px; color:#64748b;">{desc}</p>
+                        </div>
                     </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-            # Abas de Detalhe
-            sub_t1, sub_t2 = st.tabs(["🔥 Destaques no Texto", "📋 Lista de Fontes"])
-            
-            with sub_t1:
-                html_diff = highlight_text(res["text"], res["matches"])
-                st.markdown(f'<div style="background:white; padding:15px; border-radius:8px; border:1px solid #eee; height:400px; overflow-y:scroll;">{html_diff}</div>', unsafe_allow_html=True)
-                st.caption("Trechos em vermelho indicam alta similaridade com sua biblioteca.")
+                # Abas de Detalhe
+                sub_t1, sub_t2 = st.tabs(["🔥 Destaques no Texto", "📋 Lista de Fontes"])
+                
+                with sub_t1:
+                    html_diff = highlight_text(res["text"], res["matches"])
+                    st.markdown(f'<div style="background:white; padding:15px; border-radius:8px; border:1px solid #eee; height:400px; overflow-y:scroll;">{html_diff}</div>', unsafe_allow_html=True)
+                    st.caption("Trechos em vermelho indicam alta similaridade com sua biblioteca.")
 
-            with sub_t2:
-                if not res["matches"]:
-                    st.info("Nenhuma coincidência relevante encontrada.")
-                else:
-                    for m in res["matches"][:15]:
-                        with st.expander(f"{m.score*100:.0f}% - {m.source_doc}"):
-                            st.markdown(f"**Seu texto:** ...{m.query_chunk}...")
-                            st.markdown(f"**Fonte:** ...{m.source_chunk}...")
-
-            # Botão PDF
-            if generate_pdf_report:
-                pdf_path = f"Relatorio_Veritas_{int(time.time())}.pdf"
-                generate_pdf_report(pdf_path, "Relatório Veritas (Local)", res["name"], res["sim"], res["matches"], {}, DISCL)
-                with open(pdf_path, "rb") as f:
-                    st.download_button("📥 Baixar Relatório PDF", f, file_name=os.path.basename(pdf_path))
+                with sub_t2:
+                    if not res["matches"]:
+                        st.info("Nenhuma coincidência relevante encontrada.")
+                    else:
+                        for m in res["matches"][:15]:
+                            with st.expander(f"{m.score*100:.0f}% - {m.source_doc}"):
+                                st.markdown(f"**Seu texto:** ...{m.query_chunk}...")
+                                st.markdown(f"**Fonte:** ...{m.source_chunk}...")
+            else:
+                st.info("Aguardando análise. Insira um texto e clique em 'Comparar'.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TAB 2: INTERNET ---
-with tabs[1]:
-    st.markdown("### Busca na Web (Anti-Plágio Externo)")
-    st.markdown(f"<div class='disclaimer-box'>{INTERNET_PRIVACY_NOTE}</div>", unsafe_allow_html=True)
-    
-    col_web_in, col_web_out = st.columns([1, 1.2], gap="large")
-    
-    with col_web_in:
-        web_text = st.text_area("Cole o texto para busca na web:", height=200, key="web_input")
-        mode_web = st.selectbox("Intensidade da Busca", ["Rápida (5 trechos)", "Profunda (15 trechos)"])
+with main_tabs[1]:
+    with st.container(border=False):
+        st.markdown('<div class="content-panel">', unsafe_allow_html=True)
+        st.markdown("### Busca na Web (Anti-Plágio Externo)")
+        st.markdown(f"<div class='disclaimer-box'>{INTERNET_PRIVACY_NOTE}</div>", unsafe_allow_html=True)
         
-        can_run = bool(_get_serpapi_key()) and bool(web_text)
-        btn_web = st.button("🌐 Buscar na Internet", type="primary", disabled=not can_run)
+        col_web_in, col_web_out = st.columns([1, 1.2], gap="large")
         
-        if not _get_serpapi_key():
-            st.error("Chave SerpAPI não configurada.")
+        with col_web_in:
+            st.markdown("#### Entrada de Dados")
+            tab_paste_web, tab_upload_web = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
+            
+            web_text = ""
+            web_query_name = "Texto Colado"
 
-    with col_web_out:
-        if btn_web:
-            n_chunks = 5 if "Rápida" in mode_web else 15
-            params = PROFILES[st.session_state["profile"]]
-            with st.spinner("Varrendo a internet..."):
-                hits = web_similarity_scan(web_text, _get_serpapi_key(), params, n_chunks, 5)
-                st.session_state["internet_last"] = hits
-        
-        # Exibe Resultados
-        hits = st.session_state.get("internet_last")
-        if hits is not None:
-            if not hits:
-                st.success("Nenhuma similaridade significativa encontrada na web.")
-            else:
-                st.markdown("#### Principais Correspondências")
-                for h in hits:
-                    st.markdown(f"""
-                    <div class="result-card" style="padding:10px; margin-bottom:10px;">
-                        <div style="display:flex; justify-content:space-between;">
-                            <a href="{h.link}" target="_blank" style="font-weight:bold; color:#1e40af; text-decoration:none;">{h.title}</a>
-                            <span style="font-weight:bold; color:#ef4444;">{h.score*100:.0f}%</span>
+            with tab_paste_web:
+                web_text_paste = st.text_area("Cole o texto para busca na web:", height=200, key="web_input_paste", placeholder="Cole aqui o texto a ser verificado...")
+                if web_text_paste: web_text = web_text_paste
+
+            with tab_upload_web:
+                web_file_upload = st.file_uploader("Word, PDF ou TXT (Web)", type=["docx", "pdf", "txt"], key="web_input_upload", help="Arraste e solte seu arquivo aqui")
+                if web_file_upload:
+                    web_text = _read_any(web_file_upload)
+                    web_query_name = web_file_upload.name
+
+            mode_web = st.selectbox("Intensidade da Busca", ["Rápida (5 trechos)", "Profunda (15 trechos)"], help="Define quantos fragmentos do texto serão buscados.")
+            
+            can_run = bool(_get_serpapi_key()) and bool(web_text)
+            btn_web = st.button("🌐 Buscar na Internet", type="primary", disabled=not can_run, use_container_width=True)
+            
+            if not _get_serpapi_key():
+                st.error("Chave SerpAPI não configurada. Adicione-a nas configurações.")
+
+        with col_web_out:
+            st.markdown("#### Resultados da Web")
+            if btn_web:
+                n_chunks = 5 if "Rápida" in mode_web else 15
+                params = PROFILES[st.session_state["profile"]]
+                with st.spinner("Varrendo a internet em busca de similaridades..."):
+                    hits = web_similarity_scan(web_text, _get_serpapi_key(), params, n_chunks, 5)
+                    st.session_state["internet_last"] = {"hits": hits, "name": web_query_name}
+            
+            # Exibe Resultados
+            web_res = st.session_state.get("internet_last")
+            if web_res and web_res.get("hits") is not None:
+                hits = web_res["hits"]
+                if not hits:
+                    st.success("Nenhuma similaridade significativa encontrada na web.")
+                else:
+                    st.markdown("#### Principais Correspondências")
+                    for h in hits:
+                        st.markdown(f"""
+                        <div class="result-card" style="padding:15px; margin-bottom:10px;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <a href="{h.link}" target="_blank" style="font-weight:600; color:#1e40af; text-decoration:none; font-size:1.1rem;">{h.title}</a>
+                                <span style="font-weight:bold; color:#ef4444; font-size:1.1rem;">{h.score*100:.0f}%</span>
+                            </div>
+                            <div style="font-size:0.9rem; color:#475569; margin-top:8px; line-height:1.4;">{h.snippet}</div>
                         </div>
-                        <div style="font-size:0.85rem; color:#64748b; margin-top:5px;">{h.snippet}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
+            else:
+                 st.info("Aguardando busca. Insira um texto ou arquivo e clique em 'Buscar na Internet'.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TAB 3: IA ---
-with tabs[2]:
-    st.markdown("### Análise Heurística de IA")
-    st.markdown(f"<div class='disclaimer-box'>{AI_HEURISTIC_NOTE}</div>", unsafe_allow_html=True)
-    
-    ai_text = st.text_area("Cole o texto para análise de IA:", height=200)
-    btn_ai = st.button("🤖 Verificar Padrões", type="primary", disabled=not ai_text)
-    
-    if btn_ai:
-        res = analyze_ai_indicia(ai_text)
-        color, label = res["band"]
+with main_tabs[2]:
+    with st.container(border=False):
+        st.markdown('<div class="content-panel">', unsafe_allow_html=True)
+        st.markdown("### Análise Heurística de IA")
+        st.markdown(f"<div class='disclaimer-box'>{AI_HEURISTIC_NOTE}</div>", unsafe_allow_html=True)
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Score Heurístico", f"{res['score']}/100")
-        c2.metric("Repetição Vocabular", f"{1.0 - res['metrics']['ttr']:.2f}")
-        c3.metric("Conectores de IA", f"{res['metrics']['conn']:.1f}")
+        col_ai_in, col_ai_out = st.columns([1, 1.2], gap="large")
         
-        st.markdown(f"""
-        <div class="result-card" style="text-align:center; border: 2px solid {color}; background-color: {'#f0fdf4' if color=='green' else '#fef2f2'};">
-            <h3 style="color:{color}; margin:0;">{label}</h3>
-            <p style="font-size:0.9rem; margin-top:5px;">Baseado em padrões de repetição e estrutura.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        with col_ai_in:
+            st.markdown("#### Entrada de Dados")
+            tab_paste_ai, tab_upload_ai = st.tabs(["📝 Colar Texto", "📁 Upload Arquivo"])
+            
+            ai_text = ""
+            ai_query_name = "Texto Colado"
 
-# --- TAB 4: GERENCIAR BIBLIOTECA ---
-with tabs[3]:
-    st.markdown("### 📚 Banco de Dados Local")
-    st.caption("Estes arquivos são usados para comparação na primeira aba.")
-    
-    up_lib = st.file_uploader("Adicionar à Biblioteca", type=["docx", "pdf", "txt"], accept_multiple_files=True)
-    
-    if up_lib:
-        for f in up_lib:
-            content = _read_any(f)
-            if content:
-                st.session_state["library"][f.name] = content
-        st.success(f"{len(up_lib)} arquivos adicionados!")
-    
-    st.divider()
-    
-    # Listagem
-    if st.session_state["library"]:
-        st.write(f"Total de documentos: **{len(st.session_state['library'])}**")
-        for name, text in list(st.session_state["library"].items()):
-            c1, c2 = st.columns([4, 1])
-            c1.markdown(f"📄 **{name}** ({len(text)} caracteres)")
-            if c2.button("Remover", key=f"del_{name}"):
-                del st.session_state["library"][name]
+            with tab_paste_ai:
+                ai_text_paste = st.text_area("Cole o texto para análise de IA:", height=200, key="ai_input_paste", placeholder="Cole aqui o texto para análise heurística...")
+                if ai_text_paste: ai_text = ai_text_paste
+            
+            with tab_upload_ai:
+                ai_file_upload = st.file_uploader("Word, PDF ou TXT (IA)", type=["docx", "pdf", "txt"], key="ai_input_upload", help="Arraste e solte seu arquivo aqui")
+                if ai_file_upload:
+                    ai_text = _read_any(ai_file_upload)
+                    ai_query_name = ai_file_upload.name
+
+            btn_ai = st.button("🤖 Verificar Padrões", type="primary", disabled=not ai_text, use_container_width=True)
+        
+        with col_ai_out:
+            st.markdown("#### Resultado Heurístico")
+            if btn_ai:
+                with st.spinner("Analisando padrões de texto..."):
+                    res = analyze_ai_indicia(ai_text)
+                    st.session_state["ai_last"] = {"res": res, "name": ai_query_name}
+            
+            ai_data = st.session_state.get("ai_last")
+            if ai_data:
+                res = ai_data["res"]
+                color, label = res["band"]
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Score Heurístico", f"{res['score']}/100")
+                c2.metric("Repetição Vocabular", f"{1.0 - res['metrics']['ttr']:.2f}")
+                c3.metric("Conectores de IA", f"{res['metrics']['conn']:.1f}")
+                
+                st.markdown(f"""
+                <div class="result-card" style="text-align:center; border: 2px solid {color}; background-color: {'#f0fdf4' if color=='green' else '#fef2f2'}; padding: 20px;">
+                    <h3 style="color:{color}; margin:0; font-size: 1.5rem;">{label}</h3>
+                    <p style="font-size:1rem; margin-top:10px; color:#334155;">Baseado em padrões de repetição, vocabulário e estrutura.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Aguardando análise. Insira um texto ou arquivo e clique em 'Verificar Padrões'.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 4: RELATÓRIOS (NOVA) ---
+with main_tabs[3]:
+    with st.container(border=False):
+        st.markdown('<div class="content-panel">', unsafe_allow_html=True)
+        st.markdown("### 📊 Central de Relatórios")
+        st.markdown("Baixe os resultados das suas últimas análises em formato PDF ou Word.")
+        
+        col_rep1, col_rep2, col_rep3 = st.columns(3, gap="medium")
+
+        # Relatório Biblioteca
+        with col_rep1:
+            st.markdown("#### 🧪 Biblioteca (Local)")
+            res_lib = st.session_state.get("last_result")
+            if res_lib and generate_pdf_report:
+                st.success(f"Análise disponível: {res_lib['name']}")
+                pdf_path_lib = f"Relatorio_Veritas_Local_{int(time.time())}.pdf"
+                generate_pdf_report(pdf_path_lib, "Relatório Veritas (Local)", res_lib["name"], res_lib["sim"], res_lib["matches"], {"Perfil": st.session_state["profile"]}, DISCL)
+                with open(pdf_path_lib, "rb") as f:
+                    st.download_button("📥 Baixar PDF (Biblioteca)", f, file_name=os.path.basename(pdf_path_lib), use_container_width=True)
+            else:
+                st.info("Nenhuma análise de biblioteca recente.")
+
+        # Relatório Internet
+        with col_rep2:
+            st.markdown("#### 🌐 Internet (Web)")
+            res_web = st.session_state.get("internet_last")
+            if res_web and res_web.get("hits") and generate_web_pdf_report:
+                st.success(f"Busca disponível: {res_web.get('name', 'Texto')}")
+                pdf_path_web = f"Relatorio_Veritas_Web_{int(time.time())}.pdf"
+                # Calcula um score global simples para o relatório
+                global_web_score = sum(h.score for h in res_web["hits"][:5]) / max(1, len(res_web["hits"][:5])) if res_web["hits"] else 0
+                generate_web_pdf_report(pdf_path_web, "Relatório Veritas (Web)", res_web.get('name', 'Texto'), st.session_state["profile"], global_web_score, res_web["hits"], DISCL)
+                with open(pdf_path_web, "rb") as f:
+                    st.download_button("📥 Baixar PDF (Internet)", f, file_name=os.path.basename(pdf_path_web), use_container_width=True)
+            else:
+                st.info("Nenhuma busca na internet recente.")
+
+        # Relatório IA
+        with col_rep3:
+            st.markdown("#### 🤖 Detector de IA")
+            res_ai_data = st.session_state.get("ai_last")
+            if res_ai_data and generate_ai_pdf_report:
+                st.success(f"Análise disponível: {res_ai_data['name']}")
+                
+                # PDF
+                pdf_path_ai = f"Relatorio_Veritas_IA_{int(time.time())}.pdf"
+                generate_ai_pdf_report(pdf_path_ai, "Relatório Veritas (IA)", res_ai_data["name"], res_ai_data["res"], AI_HEURISTIC_NOTE)
+                with open(pdf_path_ai, "rb") as f:
+                    st.download_button("📥 Baixar PDF (IA)", f, file_name=os.path.basename(pdf_path_ai), use_container_width=True, key="dl_pdf_ai_rep")
+                
+                # Word
+                if generate_ai_docx_report:
+                    docx_path_ai = f"Relatorio_Veritas_IA_{int(time.time())}.docx"
+                    generate_ai_docx_report(docx_path_ai, "Relatório Veritas (IA)", res_ai_data["name"], res_ai_data["res"], AI_HEURISTIC_NOTE)
+                    with open(docx_path_ai, "rb") as f:
+                        st.download_button("📥 Baixar Word (IA)", f, file_name=os.path.basename(docx_path_ai), use_container_width=True, key="dl_docx_ai_rep")
+            else:
+                st.info("Nenhuma análise de IA recente.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 5: GERENCIAR BIBLIOTECA ---
+with main_tabs[4]:
+    with st.container(border=False):
+        st.markdown('<div class="content-panel">', unsafe_allow_html=True)
+        st.markdown("### 📚 Gerenciar Banco de Dados Local")
+        st.caption("Estes arquivos são usados para comparação na primeira aba 'Biblioteca (Local)'.")
+        
+        up_lib = st.file_uploader("Adicionar à Biblioteca", type=["docx", "pdf", "txt"], accept_multiple_files=True, help="Selecione múltiplos arquivos para compor sua base de comparação.")
+        
+        if up_lib:
+            for f in up_lib:
+                content = _read_any(f)
+                if content:
+                    st.session_state["library"][f.name] = content
+            st.success(f"{len(up_lib)} arquivos adicionados com sucesso!")
+        
+        st.divider()
+        
+        # Listagem
+        if st.session_state["library"]:
+            st.markdown(f"#### Documentos na Biblioteca ({len(st.session_state['library'])})")
+            for name, text in list(st.session_state["library"].items()):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"📄 **{name}** ({len(text)} caracteres)")
+                if c2.button("Remover", key=f"del_{name}", use_container_width=True):
+                    del st.session_state["library"][name]
+                    st.rerun()
+            
+            if st.button("⚠️ Limpar Biblioteca Inteira", type="primary", key="clear_lib"):
+                st.session_state["library"] = {}
                 st.rerun()
-    else:
-        st.info("Biblioteca vazia.")
+        else:
+            st.info("Sua biblioteca está vazia. Adicione arquivos para começar.")
+        st.markdown('</div>', unsafe_allow_html=True)
