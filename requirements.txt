@@ -4,3 +4,7 @@ python-docx==1.1.2
 pypdf==5.1.0
 reportlab==4.2.5
 requests==2.32.3
+streamlit
+pandas
+veritas_utils
+streamlit-option-menu
