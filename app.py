@@ -117,19 +117,57 @@ def web_similarity_scan(text, serpapi_key, profile_params, num_chunks, num_resul
         if h.link not in unique: unique[h.link] = h
     return list(unique.values())[:20]
 
+# --- NOVA FUNÇÃO DE IA DETALHADA ---
 def analyze_ai_indicia(text: str) -> Dict:
     text = (text or "").strip()
     words = _split_words(text)
-    if not words: return {"score": 0, "band": ("gray", "Indefinido"), "metrics": {"ttr": 0, "conn": 0}}
+    if not words: return {"score": 0, "band": ("gray", "Indefinido"), "metrics": {"ttr": 0, "conn": 0}, "msg": "Texto insuficiente.", "reasons": []}
+    
+    # 1. Riqueza de Vocabulário (TTR)
     unique_ratio = len(set(words)) / len(words)
-    conn_count = sum(text.lower().count(c) for c in ["além disso", "em suma", "portanto", "todavia", "nesse sentido"])
+    
+    # 2. Densidade de Conectores
+    ai_conn = ["além disso", "em suma", "portanto", "todavia", "nesse sentido", "por outro lado", "vale ressaltar", "conclui-se", "resumo"]
+    conn_count = sum(text.lower().count(c) for c in ai_conn)
     conn_density = (conn_count / len(words)) * 1000
+    
     score = 0
-    if unique_ratio < 0.4: score += 30
-    if conn_density > 8: score += 30
+    reasons = []
+    
+    # Penalidades explicadas
+    if unique_ratio < 0.45: 
+        score += 40
+        reasons.append("Vocabulário muito repetitivo (típico de IA)")
+    elif unique_ratio < 0.55:
+        score += 15
+        reasons.append("Pouca variedade de palavras")
+        
+    if conn_density > 12: 
+        score += 40
+        reasons.append("Uso excessivo de conectores lógicos (padrão de robô)")
+    elif conn_density > 8:
+        score += 15
+        
     score = min(100, score)
-    band = ("green", "Baixo") if score < 30 else ("yellow", "Médio") if score < 60 else ("red", "Alto")
-    return {"score": score, "band": band, "metrics": {"ttr": unique_ratio, "conn": conn_density}}
+    
+    # Definição da Faixa
+    if score < 30: 
+        band = ("green", "Baixa Probabilidade de IA")
+        msg = "O texto apresenta boa variedade vocabular e estrutura natural."
+    elif score < 60: 
+        band = ("yellow", "Indícios Moderados")
+        msg = "O texto tem sinais mistos. Pode haver repetição de termos ou estrutura rígida."
+    else: 
+        band = ("red", "Alta Probabilidade de IA")
+        msg = "O texto apresenta padrões fortes de geração automática: vocabulário pobre e conectores excessivos."
+
+    return {
+        "score": score, 
+        "band": band, 
+        "metrics": {"ttr": unique_ratio, "conn": conn_density}, 
+        "msg": msg,
+        "reasons": reasons
+    }
 
 def _inject_css():
     st.markdown("""
@@ -175,7 +213,7 @@ with st.sidebar:
     st.divider()
     st.caption("Allminds © 2026")
 
-# --- 1. BIBLIOTECA ---
+# --- 1. BIBLIOTECA (VISUAL MELHORADO) ---
 if selected == "Biblioteca":
     st.subheader("📂 Comparação Local")
     c1, c2 = st.columns([1, 1.2])
@@ -204,10 +242,28 @@ if selected == "Biblioteca":
     with c2:
         res = st.session_state["last_result"]
         if res:
-            color = "green" if res['sim'] < 0.15 else "red"
-            st.markdown(f"""<div class="result-card" style="border-left: 5px solid {color}"><h3>Similaridade: {res['sim']*100:.1f}%</h3></div>""", unsafe_allow_html=True)
-            for m in res["matches"][:5]:
-                st.info(f"{m.score*100:.0f}% - {m.source_doc}")
+            score = res['sim']
+            if score < 0.03:
+                color, status, expl = "green", "Original", "Nenhuma similaridade relevante."
+            elif score < 0.25:
+                color, status, expl = "yellow", "Atenção", "Pequenos trechos similares."
+            else:
+                color, status, expl = "red", "Alerta Alto", "Grande parte do texto já existe na biblioteca."
+
+            st.markdown(f"""
+            <div class="result-card" style="border-top: 5px solid {color}; text-align: center;">
+                <h2 style="color: {color}; margin:0;">{score*100:.1f}%</h2>
+                <p style="font-weight: bold; color: #555;">{status}</p>
+                <hr style="margin: 10px 0;">
+                <p style="font-size: 0.9rem; color: #666;">{expl}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if res["matches"]:
+                st.markdown("#### 🔍 Trechos:")
+                for m in res["matches"][:5]:
+                    with st.expander(f"{m.score*100:.0f}% - {m.source_doc}"):
+                        st.markdown(f"**Texto:** ...{m.query_chunk}...")
 
 # --- 2. INTERNET ---
 elif selected == "Internet":
@@ -215,7 +271,6 @@ elif selected == "Internet":
     st.markdown(f"<div class='disclaimer-box'>{INTERNET_PRIVACY_NOTE}</div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1.2])
     with c1:
-        # AQUI ESTÃO AS ABAS DE UPLOAD QUE VOCÊ PEDIU
         tab_web_p, tab_web_u = st.tabs(["📝 Colar", "📁 Upload"])
         w_text = ""
         with tab_web_p:
@@ -242,80 +297,4 @@ elif selected == "Internet":
             for h in w_res["hits"]:
                 st.markdown(f"""<div class="result-card"><a href="{h.link}" target="_blank"><b>{h.title}</b></a><br><span style="color:red">{h.score*100:.0f}%</span> - {h.snippet}</div>""", unsafe_allow_html=True)
         elif w_res:
-            st.success("Nada encontrado.")
-
-# --- 3. IA ---
-elif selected == "IA":
-    st.subheader("🤖 Detector IA")
-    st.markdown(f"<div class='disclaimer-box'>{AI_HEURISTIC_NOTE}</div>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1.2])
-    with c1:
-        # AQUI ESTÃO AS ABAS DE UPLOAD QUE VOCÊ PEDIU
-        tab_ai_p, tab_ai_u = st.tabs(["📝 Colar", "📁 Upload"])
-        ai_text = ""
-        ai_name = "Texto IA"
-        with tab_ai_p:
-            t = st.text_area("Texto IA:", height=200, key="ai_in_paste")
-            if t: ai_text = t
-        with tab_ai_u:
-            f = st.file_uploader("Arquivo (IA)", type=["docx", "pdf", "txt"], key="ai_in_up")
-            if f:
-                ai_text = _read_any(f)
-                ai_name = f.name
-                st.success(f"Lido: {f.name}")
-
-        if st.button("Verificar IA", type="primary", disabled=not ai_text):
-            res = analyze_ai_indicia(ai_text)
-            st.session_state["ai_last"] = {"res": res, "name": ai_name}
-
-    with c2:
-        ai_data = st.session_state["ai_last"]
-        if ai_data:
-            r = ai_data["res"]
-            st.markdown(f"""<div class="result-card" style="text-align:center"><h3>{r['band'][1]} (Score: {r['score']})</h3></div>""", unsafe_allow_html=True)
-
-# --- 4. RELATÓRIOS (CORRIGIDO AQUI!) ---
-elif selected == "Relatórios":
-    st.subheader("📊 Downloads")
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.markdown("**Biblioteca**")
-        r = st.session_state["last_result"]
-        if r and generate_pdf_report:
-            if st.button("PDF (Local)"):
-                generate_pdf_report("Relatorio_Local.pdf", "Veritas Local", r["name"], r["sim"], r["matches"], {}, DISCL)
-                with open("Relatorio_Local.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_Local.pdf")
-    
-    with c2:
-        st.markdown("**Internet**")
-        w = st.session_state["internet_last"]
-        if w and w["hits"] and generate_web_pdf_report:
-            if st.button("PDF (Web)"):
-                generate_web_pdf_report("Relatorio_Web.pdf", "Veritas Web", "Busca Web", "Padrão", 0.0, w["hits"], DISCL)
-                with open("Relatorio_Web.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_Web.pdf")
-
-    with c3:
-        st.markdown("**IA**")
-        a = st.session_state["ai_last"]
-        # AQUI ESTAVA O ERRO, AGORA ESTÁ CORRIGIDO COM VARIÁVEIS CURTAS
-        if a and generate_ai_pdf_report:
-            if st.button("PDF (IA)"):
-                generate_ai_pdf_report("Relatorio_IA.pdf", "Veritas IA", a["name"], a["res"], AI_HEURISTIC_NOTE)
-                with open("Relatorio_IA.pdf", "rb") as f: st.download_button("📥 Baixar", f, "Relatorio_IA.pdf")
-
-# --- 5. GERENCIAR ---
-elif selected == "Gerenciar":
-    st.subheader("📚 Gerenciar Biblioteca")
-    ups = st.file_uploader("Adicionar arquivos", accept_multiple_files=True)
-    if ups:
-        for u in ups: st.session_state["library"][u.name] = _read_any(u)
-        st.success("Adicionados!")
-    
-    if st.session_state["library"]:
-        for k in list(st.session_state["library"].keys()):
-            c1, c2 = st.columns([4,1])
-            c1.text(k)
-            if c2.button("🗑️", key=f"del_{k}"):
-                del st.session_state["library"][k]
-                st.rerun()
+            st.success("
